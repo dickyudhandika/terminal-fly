@@ -8,6 +8,8 @@ enum HotkeyAction: String, CaseIterable {
     case cycleCorner
     case increaseHeight
     case decreaseHeight
+    case increaseWidth
+    case decreaseWidth
 
     var title: String {
         switch self {
@@ -15,6 +17,8 @@ enum HotkeyAction: String, CaseIterable {
         case .cycleCorner: return "Cycle corner"
         case .increaseHeight: return "Increase height"
         case .decreaseHeight: return "Decrease height"
+        case .increaseWidth: return "Increase width"
+        case .decreaseWidth: return "Decrease width"
         }
     }
 
@@ -24,6 +28,8 @@ enum HotkeyAction: String, CaseIterable {
         case .cycleCorner: return .defaultCycleCorner
         case .increaseHeight: return .defaultHeightIncrease
         case .decreaseHeight: return .defaultHeightDecrease
+        case .increaseWidth: return .defaultWidthIncrease
+        case .decreaseWidth: return .defaultWidthDecrease
         }
     }
 }

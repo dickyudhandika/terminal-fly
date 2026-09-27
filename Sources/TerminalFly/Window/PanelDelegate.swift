@@ -16,10 +16,17 @@ final class TerminalFlyPanel: NSPanel {
 final class PanelDelegate: NSObject, NSWindowDelegate {
     private let onFrameChange: (NSRect) -> Void
     private let onCustomFrame: () -> Void
+    /// Safety net for a resize that ended larger than the screen allows.
+    /// AppKit already refuses to drag past `NSWindow.maxSize`, so this only
+    /// fires when the ceiling moved under the panel (display change mid-drag).
+    private let clampFrame: (NSRect) -> NSRect
 
-    init(onFrameChange: @escaping (NSRect) -> Void, onCustomFrame: @escaping () -> Void) {
+    init(onFrameChange: @escaping (NSRect) -> Void,
+         onCustomFrame: @escaping () -> Void,
+         clampFrame: @escaping (NSRect) -> NSRect = { $0 }) {
         self.onFrameChange = onFrameChange
         self.onCustomFrame = onCustomFrame
+        self.clampFrame = clampFrame
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -30,7 +37,11 @@ final class PanelDelegate: NSObject, NSWindowDelegate {
 
     func windowDidEndLiveResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        onFrameChange(window.frame)
+        let clamped = clampFrame(window.frame)
+        if clamped != window.frame {
+            window.setFrame(clamped, display: true, animate: false)
+        }
+        onFrameChange(clamped)
         onCustomFrame()
     }
 

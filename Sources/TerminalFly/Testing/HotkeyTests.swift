@@ -27,6 +27,10 @@ enum HotkeyTests {
                               "increase height is ⌃⌥↓")
             TestHarness.equal(HotkeyAction.decreaseHeight.defaultBinding.display, "⌃⌥↑",
                               "decrease height is ⌃⌥↑")
+            TestHarness.equal(HotkeyAction.increaseWidth.defaultBinding.display, "⌃⌥→",
+                              "increase width is ⌃⌥→")
+            TestHarness.equal(HotkeyAction.decreaseWidth.defaultBinding.display, "⌃⌥←",
+                              "decrease width is ⌃⌥←")
 
             // Every action must have a distinct default, otherwise registering
             // them would silently collide with itself.

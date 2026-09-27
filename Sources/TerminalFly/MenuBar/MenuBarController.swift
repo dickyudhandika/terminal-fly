@@ -60,6 +60,8 @@ struct MenuBarMenu: View {
 
         Button("Grow height") { controller.grow() }
         Button("Shrink height") { controller.shrink() }
+        Button("Grow width") { controller.growWidth() }
+        Button("Shrink width") { controller.shrinkWidth() }
 
         Divider()
 

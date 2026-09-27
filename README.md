@@ -45,10 +45,17 @@ needed — see [Building](#building) for why that's worth stating explicitly.
 |----------|--------|
 | `⌃⌥P` | Show/hide the panel |
 | `⌃⌥C` | Cycle corner position |
-| `⌃⌥↑` | Shrink (top edge pinned) |
-| `⌃⌥↓` | Grow (top edge pinned) |
+| `⌃⌥↑` | Shrink height (top edge pinned) |
+| `⌃⌥↓` | Grow height (top edge pinned) |
+| `⌃⌥←` | Shrink width (margin-anchored edge pinned) |
+| `⌃⌥→` | Grow width (margin-anchored edge pinned) |
 
-All four are rebindable in Settings → Hotkeys.
+All six are rebindable in Settings → Hotkeys.
+
+Resize is bounded by the display: `NSWindow.maxSize` / `minSize` are set from the
+current screen's `visibleFrame` (minus a 24pt margin), so neither a hotkey nor a
+mouse drag can take the panel past the menu bar, the Dock, or the screen edge.
+The limits are recomputed when the panel changes screen.
 
 Click the panel to type. Click anywhere else and focus returns to that app — the
 panel stays visible, it just stops taking keystrokes. That's the whole interaction
@@ -136,8 +143,8 @@ not a failure.
 Current state:
 
 ```
---test        PASS: 157 checks, 0 failures
---uitest      PASS: 35 checks, 0 failures
+--test        PASS: 182 checks, 0 failures
+--uitest      PASS: 47 checks, 0 failures
 --selftest    PASS
 --herdr-test  PASS (3 sequential requests, each on its own connection)
 --herdr-uitest PASS (render + input + fallback, in a real window)

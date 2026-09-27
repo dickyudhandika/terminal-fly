@@ -14,6 +14,22 @@ enum UITests {
         var harnessResult: Int32 = 0
 
         MainActor.assumeIsolated {
+            // These groups drive the real panel, and the panel persists its frame
+            // as it moves. Snapshot the user's own settings first, so a `--uitest`
+            // run cannot leave their terminal parked at whatever size the last
+            // clamp loop happened to stop at.
+            let defaults = UserDefaults.standard
+            let persistedKeys = ["panelFrame", "panelCorner", "panelUsesCustomFrame"]
+            let snapshot = Dictionary(uniqueKeysWithValues: persistedKeys.map {
+                ($0, defaults.object(forKey: $0))
+            })
+            defer {
+                for (key, value) in snapshot {
+                    if let value { defaults.set(value, forKey: key) }
+                    else { defaults.removeObject(forKey: key) }
+                }
+            }
+
             TestHarness.group("PanelController — floating window configuration") {
                 let controller = PanelController()
 
@@ -105,6 +121,10 @@ enum UITests {
 
             TestHarness.group("PanelController — height hotkeys change the real window") {
                 let controller = PanelController()
+                // A known starting size, so the delta assertions hold whatever the
+                // persisted frame happens to be (see the width group below).
+                controller.panel.setFrame(NSRect(x: 100, y: 100, width: 620, height: 320),
+                                          display: false)
                 controller.positions.move(to: .topRight)
                 let before = controller.panel.frame
 
@@ -118,6 +138,107 @@ enum UITests {
                 controller.shrink()
                 let shrunk = controller.panel.frame
                 TestHarness.expect(shrunk.height < before.height, "shrink() reduces height")
+            }
+
+            TestHarness.group("PanelController — resize limits come from the screen") {
+                let controller = PanelController()
+                let panel = controller.panel
+                guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
+                    TestHarness.expect(false, "no screen available for the size-limits check")
+                    return
+                }
+                let maximum = PanelGeometry.maximumSize(in: visible)
+
+                // AppKit refuses to drag a window past maxSize / below minSize,
+                // so these four numbers are what the mouse is actually bounded by.
+                TestHarness.equal(panel.maxSize.width, maximum.width,
+                                  "maxSize.width is the visible width minus two margins")
+                TestHarness.equal(panel.maxSize.height, maximum.height,
+                                  "maxSize.height is the visible height minus two margins")
+                TestHarness.equal(panel.minSize.width, PanelGeometry.minimumWidth,
+                                  "minSize.width is the usable minimum width")
+                TestHarness.equal(panel.minSize.height, PanelGeometry.minimumHeight,
+                                  "minSize.height is the usable minimum height")
+            }
+
+            TestHarness.group("PanelController — width hotkeys change the real window") {
+                let controller = PanelController()
+                // Start from a known size: whatever a previous run persisted may
+                // already sit on one of the clamps, which would make the deltas
+                // meaningless.
+                controller.panel.setFrame(NSRect(x: 100, y: 100, width: 620, height: 320),
+                                          display: false)
+                controller.positions.move(to: .topRight)
+                let before = controller.panel.frame
+
+                controller.growWidth()
+                let grown = controller.panel.frame
+                TestHarness.expect(grown.width > before.width, "growWidth() increases width")
+                TestHarness.expect(abs(grown.maxX - before.maxX) < 1,
+                                   "growWidth() keeps the right edge pinned")
+
+                controller.shrinkWidth()
+                TestHarness.expect(controller.panel.frame.width < grown.width,
+                                   "shrinkWidth() reduces width")
+            }
+
+            TestHarness.group("PanelController — width hotkeys stop at the screen edge") {
+                let controller = PanelController()
+                controller.positions.move(to: .topRight)
+                guard let visible = (controller.panel.screen ?? NSScreen.main)?.visibleFrame
+                else {
+                    TestHarness.expect(false, "no screen available for the width clamp check")
+                    return
+                }
+                let maximum = PanelGeometry.maximumSize(in: visible)
+
+                // Far more presses than it takes to cross the whole display.
+                for _ in 0..<80 { controller.growWidth() }
+                let grown = controller.panel.frame
+                TestHarness.expect(grown.width <= maximum.width + 1,
+                                   "growing forever stops at maxSize (got \(grown.width), max \(maximum.width))")
+                TestHarness.expect(PanelGeometry.isFullyVisible(grown, in: visible),
+                                   "a fully grown panel is still entirely on screen")
+
+                for _ in 0..<80 { controller.shrinkWidth() }
+                TestHarness.expect(controller.panel.frame.width >= PanelGeometry.minimumWidth,
+                                   "shrinking forever stops at minimumWidth")
+            }
+
+            TestHarness.group("PanelDelegate — a resize that escapes the limits is pulled back") {
+                let controller = PanelController()
+                guard let visible = (controller.panel.screen ?? NSScreen.main)?.visibleFrame
+                else {
+                    TestHarness.expect(false, "no screen available for the clamp check")
+                    return
+                }
+                let maximum = PanelGeometry.maximumSize(in: visible)
+                let limits = controller.panel.maxSize
+                defer { controller.panel.maxSize = limits }
+
+                // Take AppKit's own constraint away so the oversize frame can
+                // exist at all: this isolates the delegate's safety net, which is
+                // what catches a drag whose ceiling moved mid-gesture.
+                controller.panel.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                  height: CGFloat.greatestFiniteMagnitude)
+                let origin = controller.panel.frame.origin
+                let oversized = NSRect(x: origin.x, y: origin.y,
+                                       width: maximum.width + 400,
+                                       height: maximum.height + 400)
+
+                controller.panel.setFrame(oversized, display: false)
+                TestHarness.expect(controller.panel.frame.width > maximum.width,
+                                   "the oversize frame was applied, so the clamp is what fixes it")
+
+                // Fire the delegate exactly as AppKit does when a mouse-up ends a
+                // live resize, rather than trusting AppKit to synthesise a drag.
+                let notification = Notification(name: NSWindow.didEndLiveResizeNotification,
+                                                object: controller.panel)
+                (controller.panel.delegate as? PanelDelegate)?.windowDidEndLiveResize(notification)
+
+                let corrected = controller.panel.frame
+                TestHarness.equal(corrected.size, maximum,
+                                  "windowDidEndLiveResize clamps the escape back to maximumSize")
             }
 
             TestHarness.group("PreferencesStore — live appearance application") {

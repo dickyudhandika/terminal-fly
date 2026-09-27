@@ -67,9 +67,71 @@ enum GeometryTests {
                               "will not shrink below the usable minimum")
 
             let huge = PanelGeometry.resized(base, byHeightDelta: 10_000, in: screen)
-            TestHarness.expect(huge.height <= screen.height, "will not grow past the screen")
+            TestHarness.equal(huge.height, screen.height - PanelGeometry.margin * 2,
+                              "will not grow past the screen")
             TestHarness.expect(PanelGeometry.isFullyVisible(huge, in: screen),
                                "a maximised panel is still fully on screen")
+        }
+
+        TestHarness.group("PanelGeometry — width resize") {
+            let base = PanelGeometry.frame(for: .topRight, size: size, in: screen)
+
+            let grown = PanelGeometry.resizedWidth(base, byWidthDelta: 100, in: screen)
+            TestHarness.equal(grown.width, 720, "grows width by the requested delta")
+            TestHarness.equal(grown.maxX, base.maxX, "right edge stays pinned while growing")
+
+            let shrunk = PanelGeometry.resizedWidth(base, byWidthDelta: -100, in: screen)
+            TestHarness.equal(shrunk.width, 520, "shrinks width by the requested delta")
+            TestHarness.equal(shrunk.minX, base.minX + 100, "shrinking pulls the left edge in")
+
+            let tiny = PanelGeometry.resizedWidth(base, byWidthDelta: -10_000, in: screen)
+            TestHarness.equal(tiny.width, PanelGeometry.minimumWidth,
+                              "will not shrink below the usable minimum")
+
+            let huge = PanelGeometry.resizedWidth(base, byWidthDelta: 10_000, in: screen)
+            TestHarness.equal(huge.width, screen.width - PanelGeometry.margin * 2,
+                              "max width is exactly visibleFrame.width minus two margins")
+            TestHarness.expect(PanelGeometry.isFullyVisible(huge, in: screen),
+                               "a max-width panel is still fully on screen")
+        }
+
+        TestHarness.group("PanelGeometry — width resize keeps a left-parked panel left") {
+            let base = PanelGeometry.frame(for: .topLeft, size: size, in: screen)
+            let huge = PanelGeometry.resizedWidth(base, byWidthDelta: 10_000, in: screen)
+            TestHarness.equal(huge.minX, base.minX,
+                              "a left-anchored panel grows rightwards, not off the left edge")
+            TestHarness.expect(PanelGeometry.isFullyVisible(huge, in: screen),
+                               "a max-width left panel is still fully on screen")
+        }
+
+        TestHarness.group("PanelGeometry — maximumSize helper") {
+            let maximum = PanelGeometry.maximumSize(in: screen)
+            TestHarness.equal(maximum.width, screen.width - PanelGeometry.margin * 2,
+                              "max width is visible width minus two margins")
+            TestHarness.equal(maximum.height, screen.height - PanelGeometry.margin * 2,
+                              "max height is visible height minus two margins")
+        }
+
+        TestHarness.group("PanelGeometry — size clamp safety net") {
+            // Too big on both axes: back down to the ceiling, origin untouched.
+            let oversized = CGRect(x: 100, y: 100, width: 4000, height: 4000)
+            let shrunkToMax = PanelGeometry.clamped(oversized, in: screen)
+            TestHarness.equal(shrunkToMax.size, PanelGeometry.maximumSize(in: screen),
+                              "an oversized frame clamps to maximumSize")
+            TestHarness.equal(shrunkToMax.origin, oversized.origin,
+                              "the clamp corrects size only, never position")
+
+            // Too small on both axes: back up to the usable minimum.
+            let undersized = CGRect(x: 100, y: 100, width: 10, height: 10)
+            TestHarness.equal(PanelGeometry.clamped(undersized, in: screen).size,
+                              CGSize(width: PanelGeometry.minimumWidth,
+                                     height: PanelGeometry.minimumHeight),
+                              "an undersized frame clamps to the minima")
+
+            // A frame that already fits must survive the round trip verbatim.
+            let fitting = PanelGeometry.frame(for: .bottomRight, size: size, in: screen)
+            TestHarness.equal(PanelGeometry.clamped(fitting, in: screen), fitting,
+                              "a frame inside the limits is returned unchanged")
         }
 
         TestHarness.group("PanelGeometry — saved-frame validation") {

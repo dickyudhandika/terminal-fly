@@ -46,6 +46,11 @@ final class PanelController {
             onCustomFrame: { [weak positions] in
                 guard let positions, !positions.isProgrammaticMove else { return }
                 positions.markCustomFrame()
+            },
+            clampFrame: { [weak panel] frame in
+                guard let panel,
+                      let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return frame }
+                return PanelGeometry.clamped(frame, in: visible)
             }
         )
         panel.delegate = windowDelegate
@@ -146,11 +151,19 @@ final class PanelController {
     }
 
     func grow() {
-        positions.adjustHeight(by: 24)
+        positions.adjustHeight(by: PanelGeometry.resizeStep)
     }
 
     func shrink() {
-        positions.adjustHeight(by: -24)
+        positions.adjustHeight(by: -PanelGeometry.resizeStep)
+    }
+
+    func growWidth() {
+        positions.adjustWidth(by: PanelGeometry.resizeStep)
+    }
+
+    func shrinkWidth() {
+        positions.adjustWidth(by: -PanelGeometry.resizeStep)
     }
 
     func setOpacity(_ value: CGFloat) {

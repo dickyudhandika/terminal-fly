@@ -284,6 +284,8 @@ final class AppCoordinator: NSObject {
         case .cycleCorner: controller.cycleCorner()
         case .increaseHeight: controller.grow()
         case .decreaseHeight: controller.shrink()
+        case .increaseWidth: controller.growWidth()
+        case .decreaseWidth: controller.shrinkWidth()
         }
         refreshMenuBar()
     }

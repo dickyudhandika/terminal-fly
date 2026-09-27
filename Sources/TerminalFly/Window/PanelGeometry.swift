@@ -16,6 +16,21 @@ struct PanelGeometry {
     /// almost no rows and the prompt is unusable.
     static let minimumHeight: CGFloat = 120
 
+    /// Smallest width the panel may be shrunk to. Below this the terminal has
+    /// too few columns to render a prompt legibly.
+    static let minimumWidth: CGFloat = 300
+
+    /// How far one grow/shrink hotkey press moves an edge.
+    static let resizeStep: CGFloat = 24
+
+    /// Maximum panel size inside `visibleFrame`, leaving `margin` on all four
+    /// sides. Feeds both AppKit's `maxSize` (mouse-drag constraint) and the
+    /// resize clamp helpers.
+    static func maximumSize(in visibleFrame: CGRect) -> CGSize {
+        CGSize(width: visibleFrame.width - margin * 2,
+               height: visibleFrame.height - margin * 2)
+    }
+
     enum Corner: String, CaseIterable {
         case topLeft, topRight, bottomLeft, bottomRight
 
@@ -69,6 +84,35 @@ struct PanelGeometry {
         var result = frame
         result.origin.y -= (clamped - frame.height)
         result.size.height = clamped
+        return result
+    }
+
+    /// Grows or shrinks the width while keeping the margin-anchored edge fixed,
+    /// so a corner-parked panel keeps hugging its corner instead of sliding off
+    /// screen as it grows. Mirrors the height clamp logic.
+    static func resizedWidth(_ frame: CGRect, byWidthDelta delta: CGFloat,
+                             in visibleFrame: CGRect) -> CGRect {
+        let maximum = visibleFrame.width - margin * 2
+        let clamped = max(minimumWidth, min(frame.width + delta, maximum))
+        var result = frame
+        result.size.width = clamped
+        // A right-parked panel grows leftwards (right edge pinned); a
+        // left-parked or free-floating one grows rightwards.
+        let anchoredToRight = abs(frame.maxX - (visibleFrame.maxX - margin)) <= 1
+        if anchoredToRight {
+            result.origin.x = frame.maxX - clamped
+        }
+        return result
+    }
+
+    /// Forces `frame`'s size into [minimum, `maximumSize(in:)`] and leaves its
+    /// origin alone. Safety net for a resize that somehow escaped AppKit's
+    /// `maxSize` constraint, and for a frame saved on a bigger display.
+    static func clamped(_ frame: CGRect, in visibleFrame: CGRect) -> CGRect {
+        let maximum = maximumSize(in: visibleFrame)
+        var result = frame
+        result.size.width = max(minimumWidth, min(frame.width, maximum.width))
+        result.size.height = max(minimumHeight, min(frame.height, maximum.height))
         return result
     }
 

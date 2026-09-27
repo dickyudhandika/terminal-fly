@@ -52,6 +52,7 @@ final class PositionManager {
 
     init(panel: NSPanel) {
         self.panel = panel
+        updateSizeLimits()
         // Re-park when the panel lands on a different display.
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeScreenNotification,
@@ -60,6 +61,9 @@ final class PositionManager {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.reparkAfterScreenChange()
+                // The new display has a different visible frame, so the drag
+                // constraint has to follow the panel.
+                self?.updateSizeLimits()
             }
         }
     }
@@ -93,10 +97,14 @@ final class PositionManager {
 
         lastCorner = corner
         usesCustomFrame = false
+        // A panel saved on a bigger display must come back at a size this one
+        // can actually show, otherwise the preset itself overflows the screen.
+        let size = PanelGeometry.clamped(panel.frame, in: target.visibleFrame).size
         let frame = PanelGeometry.frame(for: corner,
-                                        size: panel.frame.size,
+                                        size: size,
                                         in: target.visibleFrame)
         applyFrame(frame, display: true)
+        updateSizeLimits()
         save()
     }
 
@@ -110,14 +118,38 @@ final class PositionManager {
 
     // MARK: - Size
 
+    /// AppKit enforces these during a mouse-drag resize, which is the only
+    /// thing that stops a drag from running the panel off the display.
+    ///
+    /// Called at launch, after a corner preset moves the panel, and whenever it
+    /// changes screen — a smaller display needs a smaller ceiling.
+    func updateSizeLimits() {
+        guard let panel else { return }
+        // No screen at all (headless run, or a panel AppKit has not placed yet):
+        // leave AppKit's unconstrained default alone rather than invent a
+        // display size, which would shrink the panel to a fiction.
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        panel.maxSize = PanelGeometry.maximumSize(in: visible)
+        panel.minSize = CGSize(width: PanelGeometry.minimumWidth,
+                               height: PanelGeometry.minimumHeight)
+    }
+
     func adjustHeight(by delta: CGFloat) {
         guard let panel else { return }
-        let visible = (panel.screen ?? NSScreen.main)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: panel.frame.width, height: panel.frame.height)
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
         let frame = PanelGeometry.resized(panel.frame, byHeightDelta: delta, in: visible)
         applyFrame(frame, display: true)
         // A manual height change is a custom position even if the panel is still
         // parked in a corner — the user picked this size deliberately.
+        usesCustomFrame = true
+        save()
+    }
+
+    func adjustWidth(by delta: CGFloat) {
+        guard let panel else { return }
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        let frame = PanelGeometry.resizedWidth(panel.frame, byWidthDelta: delta, in: visible)
+        applyFrame(frame, display: true)
         usesCustomFrame = true
         save()
     }
@@ -145,7 +177,11 @@ final class PositionManager {
             // corner-preset frame has to still look like a corner, otherwise a
             // resize on another display would leave it stranded mid-screen.
             if usesCustomFrame || PanelGeometry.isCornerLike(saved, in: screen.visibleFrame) {
-                applyFrame(saved, display: false)
+                // Clamp first: a frame saved on a bigger display must not come
+                // back hanging off this one.
+                applyFrame(PanelGeometry.clamped(saved, in: screen.visibleFrame),
+                           display: false)
+                updateSizeLimits()
                 return
             }
         }

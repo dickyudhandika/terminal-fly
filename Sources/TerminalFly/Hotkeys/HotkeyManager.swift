@@ -31,6 +31,18 @@ struct HotkeyBinding: Equatable, Codable {
         modifiers: UInt32(controlKey | optionKey),
         display: "⌃⌥↑"
     )
+
+    static let defaultWidthIncrease = HotkeyBinding(
+        keyCode: UInt32(kVK_RightArrow),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥→"
+    )
+
+    static let defaultWidthDecrease = HotkeyBinding(
+        keyCode: UInt32(kVK_LeftArrow),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥←"
+    )
 }
 
 /// Registers system-wide hotkeys.
