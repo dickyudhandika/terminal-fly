@@ -1,7 +1,7 @@
 # Terminal Fly — Always-On-Top Terminal for macOS
 
 ## Status
-REVIEW
+IMPLEMENTED (Steps 1–7 complete, Step 8 not started)
 
 ## Goal
 A lightweight macOS terminal app that stays visible above other apps while you work. Like the kitty + Hammerspoon overlay setup, but as a standalone product — no Hammerspoon, no kitty dependency, works for anyone.
@@ -302,3 +302,11 @@ Settings window:
 ## Changelog
 - 2026-09-27: Initial draft. Based on wiki research `[[kitty-sticky-panel-macos]]` + skill `macos-window-automation`. Core insight: owning the window eliminates all Hammerspoon dead ends.
 - 2026-09-27: Updated — locked product decisions (name, MIT, direct distribution, click-to-type focus model, herdr pairing as Step 8). Added competitive landscape with oTerm/Opus/Backgrind. Added target users. Resolved open questions 2, 3, 7. Added risk 8 (herdr IPC protocol). Status → REVIEW.
+- 2026-09-27: **Steps 1–7 implemented and verified.** Status → IMPLEMENTED.
+  - Repo live: https://github.com/dickyudhandika/terminal-fly (public, MIT). 48 files, commit `bcbc317`.
+  - Tests: 80 logic checks (`--test`, headless) + 35 window-server checks (`--uitest`). No XCTest — no Xcode.app on this machine.
+  - Verified fresh clone builds: submodule pin `fe4fb45` → `./scripts/build.sh release` → `--test` 80/80.
+  - DMG mounts, app inside is valid-on-disk + satisfies its Designated Requirement, and its embedded `--test` passes.
+  - **Build deviation from plan:** plan assumed XcodeGen + `xcodebuild`, but this machine has Command Line Tools only — `xcodebuild` is unavailable and SwiftPM is broken (its bundled `libPackageDescription.dylib` is missing symbols, so every `Package.swift` fails to link). `scripts/build.sh` compiles with `swiftc` directly, runs SwiftTerm's SPM plugin binary by hand, and assembles the bundle. Same sources.
+  - **Blocker found during Step 3:** the old `~/.hammerspoon/figma_pin.lua` prototype (from the kitty setup) binds the same four hotkeys and silently wins, because Hammerspoon starts first at login. Carbon reports success regardless. **`figma_pin.lua` must be disabled** or Terminal Fly's hotkeys will never fire on this machine.
+  - **Still open:** notarization needs an Apple Developer ID cert (tooling ready: `scripts/make-dmg.sh --notarize`); launch-at-login (`SMAppService`) untested, needs the app in `/Applications`; multi-display re-parking verified by unit test only (single-display machine); Step 8 herdr blocked on herdr's IPC contract.
