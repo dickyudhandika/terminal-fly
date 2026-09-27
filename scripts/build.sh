@@ -28,7 +28,12 @@ esac
 
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
 TARGET="arm64-apple-macosx14.0"
-COMMON=(-sdk "$SDK" -target "$TARGET" -swift-version 6 -I "$OBJ_DIR")
+# -swift-version 5, not 6: Swift 6 language mode needs a newer toolchain than
+# some CI runners ship (GitHub's macos-14 image supports only 4 / 4.2 / 5 and
+# hard-errors on 6). The app and SwiftTerm both compile cleanly in Swift 5 mode,
+# and the strict-concurrency annotations in the sources stay meaningful as
+# warnings. Bump this only when the oldest supported toolchain accepts it.
+COMMON=(-sdk "$SDK" -target "$TARGET" -swift-version 5 -I "$OBJ_DIR")
 
 mkdir -p "$GEN_DIR" "$OBJ_DIR"
 
