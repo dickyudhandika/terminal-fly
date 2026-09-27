@@ -23,11 +23,6 @@ enum SelfTest {
         let terminal = HeadlessTerminal(
             queue: DispatchQueue(label: "terminalfly.selftest"),
             options: TerminalOptions.default,
-            directDelivery: true,
-            onLaunchFailure: { error in
-                print("selftest: LAUNCH FAILED: \(error)")
-                done.signal()
-            },
             onEnd: { code in
                 lock.lock(); exitCode = code; lock.unlock()
                 done.signal()
@@ -77,19 +72,14 @@ enum SelfTest {
         return 0
     }
 
-    /// Reads the visible screen out of the emulator. SwiftTerm has no single
-    /// "get everything" accessor on the public surface, so we walk the lines.
+    /// Reads the visible screen out of the emulator.
+    ///
+    /// Uses the public region API `getText(start:end:)`. The per-cell
+    /// `getText(col:row:)` accessor exists only in newer SwiftTerm revisions, so
+    /// relying on it would break the pinned release (see vendor pin rationale in
+    /// scripts/build.sh).
     private static func bufferText(_ terminal: Terminal) -> String {
-        var out = ""
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            var text = ""
-            for col in 0..<terminal.cols {
-                text += terminal.getText(col: col, row: row) ?? " "
-            }
-            out += text.trimmingCharacters(in: .whitespaces) == "" ? "\n" : text + "\n"
-            _ = line
-        }
-        return out
+        let end = Position(col: terminal.cols - 1, row: terminal.rows - 1)
+        return terminal.getText(start: Position(col: 0, row: 0), end: end)
     }
 }

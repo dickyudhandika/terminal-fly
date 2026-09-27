@@ -32,8 +32,4 @@ final class TerminalDelegate: NSObject, LocalProcessTerminalViewDelegate {
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         onProcessTerminated?(exitCode)
     }
-
-    func processFailedToStart(source: TerminalView, error: LocalProcessError) {
-        NSLog("[TerminalFly] shell failed to start: \(error)")
-    }
 }

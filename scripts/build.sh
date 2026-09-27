@@ -37,14 +37,39 @@ COMMON=(-sdk "$SDK" -target "$TARGET" -swift-version 5 -I "$OBJ_DIR")
 
 mkdir -p "$GEN_DIR" "$OBJ_DIR"
 
-# --- 1. Generate SwiftTermBuildInfo + SwiftTermTerminfo (normally an SPM build
-#        plugin; we run the generator directly).
-if [ ! -f "$GEN_DIR/SwiftTermTerminfo.swift" ]; then
+# --- 1. Generate SwiftTermBuildInfo (normally an SPM build plugin; we run the
+#        generator directly).
+#
+#        The generator's argument contract changed upstream: v1.20.0 takes
+#        (repositoryPath, outputFile), while later revisions add a third arg for
+#        a terminfo file. Try the newer 3-arg form first and fall back, so this
+#        works across a range of pins rather than only the one we happen to use.
+GEN_SWIFT="$GEN_DIR/SwiftTermBuildInfo.swift"
+TERMINFO_SWIFT="$GEN_DIR/SwiftTermTerminfo.swift"
+
+if [ ! -f "$GEN_SWIFT" ]; then
   echo "==> generating SwiftTerm build info"
-  swiftc -O -o "$GEN_DIR/buildinfo-gen" \
+  # -parse-as-library is required: the generator declares @main, and without it
+  # the compiler treats the file as top-level code and errors with "'main'
+  # attribute cannot be used in a module that contains top-level code".
+  swiftc -O -parse-as-library -o "$GEN_DIR/buildinfo-gen" \
     "$SWIFTTERM_DIR"/Sources/SwiftTermBuildInfoGenerator/*.swift
-  "$GEN_DIR/buildinfo-gen" "$SWIFTTERM_DIR" \
-    "$GEN_DIR/SwiftTermBuildInfo.swift" "$GEN_DIR/SwiftTermTerminfo.swift"
+  "$GEN_DIR/buildinfo-gen" "$SWIFTTERM_DIR" "$GEN_SWIFT" "$TERMINFO_SWIFT" 2>/dev/null \
+    || "$GEN_DIR/buildinfo-gen" "$SWIFTTERM_DIR" "$GEN_SWIFT"
+fi
+
+# The library build would otherwise fail with a confusing "cannot find type"
+# error pointing at SwiftTerm sources instead of at the real cause.
+if [ ! -s "$GEN_SWIFT" ]; then
+  echo "FATAL: build-info generator produced no output — check $GEN_DIR/buildinfo-gen" >&2
+  exit 1
+fi
+
+# Only newer SwiftTerm revisions ship a generated terminfo source; include it
+# when present instead of passing a path that may not exist.
+GENERATED=("$GEN_SWIFT")
+if [ -s "$TERMINFO_SWIFT" ]; then
+  GENERATED+=("$TERMINFO_SWIFT")
 fi
 
 # --- 2. Build SwiftTerm into a static library + module.
@@ -56,7 +81,7 @@ if [ ! -f "$OBJ_DIR/libSwiftTerm.a" ]; then
     -emit-module -emit-module-path "$OBJ_DIR/SwiftTerm.swiftmodule" \
     -emit-library -static -o "$OBJ_DIR/libSwiftTerm.a" \
     @"$OBJ_DIR/swiftterm-sources.txt" \
-    "$GEN_DIR/SwiftTermBuildInfo.swift" "$GEN_DIR/SwiftTermTerminfo.swift"
+    "${GENERATED[@]}"
 fi
 
 # --- 3. Compile the app.
