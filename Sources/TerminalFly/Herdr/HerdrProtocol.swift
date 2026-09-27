@@ -36,8 +36,12 @@ enum HerdrProtocol {
     enum Method: String {
         case paneList = "pane.list"
         case paneRead = "pane.read"
-        /// Raw bytes into the pane's input — what typing should use.
-        case paneSendInput = "pane.send_input"
+        /// Raw bytes into the pane's PTY stdin — what typing should use.
+        /// `pane.send_text` writes directly to the PTY, so \r and \n work
+        /// as nature intended. Do NOT use `pane.send_input` for typing:
+        /// it writes to herdr's input line editor, which buffers text and
+        /// does not submit on \r or \n.
+        case paneSendText = "pane.send_text"
         /// Named keys ("Enter", "C-c") — for special keys.
         case paneSendKeys = "pane.send_keys"
         // Used only by the test harness to build and tear down an isolated
@@ -180,10 +184,10 @@ enum HerdrProtocol {
         return params
     }
 
-    /// `pane.send_input` params — raw bytes into the pane. This is what typing
-    /// uses; it does not submit, so a caller wanting a command run must send the
-    /// newline separately.
-    static func inputParams(paneID: String, text: String) -> [String: Any] {
+    /// `pane.send_text` params — raw bytes into the pane's PTY stdin. This is
+    /// what typing uses; `\r` and `\n` are interpreted by the shell's line
+    /// discipline, just like a real terminal.
+    static func textParams(paneID: String, text: String) -> [String: Any] {
         ["pane_id": paneID, "text": text]
     }
 

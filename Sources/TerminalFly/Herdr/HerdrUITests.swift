@@ -167,8 +167,7 @@ private final class ScratchWorkspace {
     }
 
     func sendCommand(_ command: String) {
-        _ = try? client.call(.paneSendInput, params: HerdrProtocol.inputParams(paneID: paneID, text: command))
-        _ = try? client.call(.paneSendKeys, params: HerdrProtocol.keysParams(paneID: paneID, keys: ["Enter"]))
+        _ = try? client.call(.paneSendText, params: HerdrProtocol.textParams(paneID: paneID, text: command + "\n"))
     }
 
     func destroy() {

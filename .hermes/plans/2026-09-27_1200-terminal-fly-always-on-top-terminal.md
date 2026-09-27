@@ -1,7 +1,11 @@
 # Terminal Fly — Always-On-Top Terminal for macOS
 
 ## Status
-IMPLEMENTED (Steps 1–8 complete)
+IMPLEMENTED (Steps 1–8 complete; post-Step-8 review fixes landed)
+
+Last verified 2026-09-27 at commit `8360c4c` on `main` — all four CI jobs pass (`build`, `clt-only`, `shellcheck`, `icon`) and the logs confirm `PASS: 157 checks, 0 failures` on both toolchains. `scripts/verify.sh release` = ALL CHECKS PASSED.
+
+Two items remain genuinely blocked and need the user (see [Remaining blockers](#remaining-blockers)): the stale Hammerspoon hotkey script, and an Apple Developer ID certificate.
 
 ## Goal
 A lightweight macOS terminal app that stays visible above other apps while you work. Like the kitty + Hammerspoon overlay setup, but as a standalone product — no Hammerspoon, no kitty dependency, works for anyone.
@@ -245,7 +249,7 @@ Settings window:
 - What: App icon, launch at login (SMAppService), notarization, DMG build, GitHub repo setup (MIT)
 - Files: `Resources/Assets.xcassets`, build scripts, `LICENSE`
 - Validation: `codesign --verify` passes. `xcrun notarytool submit` accepted. DMG opens on clean machine. GitHub repo public with MIT license.
-- Result: icon + DMG + repo done. **Launch at login is implemented AND verified** via `--logintest` (registers, checks `.enabled`, unregisters; self-reversing) — run from `/Applications` to exercise it, since `SMAppService` requires a stable location. Notarization remains blocked on an Apple Developer ID cert.
+- Result: icon + DMG + repo done. **Launch at login is implemented AND verified** — `--logintest` registers the login item, asserts the status is `.enabled`, unregisters it and asserts the item is cleared, so it is self-reversing and leaves no stray login item. `SMAppService` requires a stable install location, so the check exits `2` (skip, not failure) when the app is not in `/Applications`. **Verified for real on 2026-09-27 by running it from `/Applications`:** all four checks pass, and a second run reported `initial status=notFound`, confirming the cleanup. Wired into `scripts/verify.sh`. Notarization remains blocked on an Apple Developer ID cert.
 - **Sparkle auto-update is deferred, not done.** It is P2 ("nice to have") and it cannot be wired up honestly before notarization: Sparkle verifies the signature of the downloaded update and needs an EdDSA-signed appcast with a hosted feed, which is meaningless against an ad-hoc-signed DMG. Implement it once a Developer ID and a release pipeline exist. Tracked in README → Known gaps.
 
 ### Step 8: herdr integration
@@ -259,7 +263,28 @@ Settings window:
   - Input: `pane.send_input` (raw bytes; what typing uses) and `pane.send_keys` (named keys like `Enter`, `C-c`).
   - `source:"recent"` returns empty on a pane that has not scrolled — use `source:"visible"`.
 - Validation: all three criteria verified end to end by `--herdr-uitest` in a real window against live herdr, using an isolated scratch workspace (never the user's panes): pane output renders in the floating panel; typing in the panel reaches the pane; disconnect falls back to the standalone shell.
-- Result: `--herdr-test` (socket layer, 3 sequential requests), `--herdr-uitest` (render + input + fallback, 8 checks), 31 unit checks over the session logic via a fake transport. Both wired into `scripts/verify.sh`.
+- Result: `--herdr-test` (socket layer, 3 sequential requests), `--herdr-uitest` (render + input + fallback, 8 checks, real window + live herdr in a scratch workspace that is torn down afterwards), 31 unit checks over the session logic via a fake transport. Both wired into `scripts/verify.sh`. Unit tests live in `Testing/HerdrTests.swift`.
+
+### Step 9: Post-implementation review hardening (done)
+
+A review after Step 8 found three defects that the tests did not catch, all introduced by the herdr work. Fixed in `0cb2c54` and `8360c4c`:
+
+1. **App launch blocked on the socket.** `buildMenu()` made a synchronous herdr call with a 10-second timeout from inside `init` — if herdr was wedged, the app could not finish launching. Now the menu reads a cache filled on a background queue (`refreshHerdrPanes`).
+2. **AppKit touched off the main thread.** `HerdrSession`'s callbacks were documented as "on the main queue" but actually fired on the polling thread, so the coordinator mutated AppKit state from a background thread. Every callback body now hops to `DispatchQueue.main`.
+3. **Unsynchronized `lastScreen`.** The polling thread and the main-thread typing path both mutated `lastScreen`. Added a private serial queue; `HerdrSession` is now `@unchecked Sendable` justified by that queue.
+
+Tests went 151 → 157, and the new concurrency tests were proven non-vacuous: replacing the serial queue with a caller-thread passthrough makes the process die with SIGSEGV (exit 139) rather than merely failing an assertion.
+
+Lesson worth keeping: two of the three were *documentation lies* — a comment claiming a threading guarantee the code did not provide. Prefer a mechanism (the serial queue) over a comment.
+
+## Remaining blockers
+
+Neither of these can be resolved from inside the repository; both need the user.
+
+1. **Stale Hammerspoon hotkey script** — `~/.hammerspoon/figma_pin.lua` (the old kitty prototype) binds the same four hotkeys (`⌃⌥P/C/↑/↓`) and silently wins, because Hammerspoon loads first at login. Carbon's `RegisterEventHotKey` reports success even when it loses, which is why this produced a long false debugging trail. It is user-owned config and has not been modified. **Disable the file** (or remove those four bindings) and reload Hammerspoon for Terminal Fly's hotkeys to fire on this machine.
+2. **Apple Developer ID certificate** — the tooling is ready (`scripts/make-dmg.sh --notarize`) but there is no certificate, so the DMG is ad-hoc signed and unnotarized; other machines need a Gatekeeper override. Sparkle (P2) is deferred behind the same blocker, since it needs a notarized app plus an EdDSA-signed appcast on a hosted feed.
+
+Verified-but-limited, not a blocker: **multi-display re-parking** is covered by unit tests (a saved frame on a vanished screen is rejected) but has never run on real hardware — this is a single-display machine.
 
 ## Tests / Validation
 
@@ -274,6 +299,21 @@ Settings window:
 | 7. Distribution | `spctl --assess --verbose=4 TerminalFly.app` passes. DMG installs on clean macOS. GitHub repo live with MIT license. |
 | 8. herdr | herdr session detected → output in floating panel. Input reaches herdr. Kill herdr → graceful fallback. |
 
+### Verified test surface (2026-09-27, commit `8360c4c`)
+
+No XCTest: there is no `Xcode.app` on this machine, so the suites are flags on the app binary itself.
+
+| Flag | Coverage | Result |
+|------|----------|--------|
+| `--test` | 157 pure logic checks (geometry, hotkeys, shell, herdr session over a fake transport, concurrency) — headless | PASS, 0 failures |
+| `--uitest` | 35 window-server checks | PASS |
+| `--selftest` | PTY spawn + SwiftTerm parse round trip | PASS |
+| `--herdr-test` | socket layer, 3 sequential requests; exit `2` when no herdr is running | PASS / skip |
+| `--herdr-uitest` | render + input + fallback in a real window against **live** herdr, using a throwaway workspace | PASS |
+| `--logintest` | register → assert `.enabled` → unregister; exit `2` outside `/Applications` | PASS (run from `/Applications`) |
+
+`scripts/verify.sh <config>` runs all of them and asserts on the artifacts, not on a pipeline's exit status.
+
 ## Risks & Open Questions
 
 1. **SwiftTerm maturity for our use case** — need to verify: true color support, mouse reporting, resize handling. Mitigation: Step 2 validates this early. If SwiftTerm fails, fallback to xterm.js in WKWebView.
@@ -282,11 +322,11 @@ Settings window:
 
 3. ~~App Store vs direct distribution~~ — RESOLVED. Direct distribution only. Open source MIT. No App Store — sandbox kills PTY fork.
 
-4. **Global hotkey conflicts** — ⌃⌥ combos are relatively safe but user-customizable hotkeys may conflict with system or other apps. Need conflict detection in hotkey settings.
+4. **Global hotkey conflicts** — **CONFIRMED ON THIS MACHINE, not hypothetical.** ⌃⌥ combos are relatively safe but user-customizable hotkeys can conflict with system or other apps, and Carbon gives no failure signal — `RegisterEventHotKey` returns success even when another process already owns the combo. `~/.hammerspoon/figma_pin.lua` demonstrated the failure mode and cost real debugging time. Conflict detection in hotkey settings is still unbuilt; for now README documents the symptom and the check.
 
-5. **Multiple displays** — Position save/restore needs to handle display arrangement changes. kitty panel had this issue (re-park on `windowsChanged`). NSWindow has `NSWindow.didChangeScreenNotification` — simpler.
+5. **Multiple displays** — Position save/restore needs to handle display arrangement changes. kitty panel had this issue (re-park on `windowsChanged`). NSWindow has `NSWindow.didChangeScreenNotification` — simpler. **Implemented** (`Window/PanelGeometry.swift` + `PositionManager`); a saved frame on a screen that no longer exists is rejected and re-parked. Covered by unit tests only — this machine has a single display, so real hardware behaviour (unplug/replug, arrangement change) is unverified.
 
-6. **Shell environment** — When launched from Finder (not terminal), the shell won't inherit PATH from `.zshrc` / `.bash_profile` unless we spawn a login shell (`-l` flag). This is a common terminal app gotcha.
+6. **Shell environment** — When launched from Finder (not terminal), the shell won't inherit PATH from `.zshrc` / `.bash_profile` unless we spawn a login shell (`-l` flag). This is a common terminal app gotcha. **Handled:** default is `/bin/zsh` with args `["-l"]` from `$HOME`, and the shell/args/working dir are configurable in Settings → Shell.
 
 7. ~~Name: "Terminal Fly"~~ — RESOLVED. Keeping "Terminal Fly". Trademark search pending but not blocking development.
 
@@ -301,16 +341,19 @@ Settings window:
    - **Request**: `{"id": "<correlation>", "method": "<name>", "params": {...}}\n`
    - **Response**: `{"id": "...", "result": {...}}\n` or `{"id": "...", "error": {"code": "...",
      "message": "..."}}\n`
-   - **Methods needed**:
+   - **Methods used** (as implemented; the raw `herdr api schema` names were checked against it):
      | Need | Method | Params |
      |------|--------|--------|
      | discover panes | `pane.list` | `{workspace_id?: string\|null}` |
      | render output | `pane.read` | `{pane_id, source: visible\|recent\|recent_unwrapped\|detection, lines?, strip_ansi?, format?}` |
-     | send keystrokes | `pane.send_text` | `{pane_id, text}` (literal) |
-     | send special keys | `pane.send_keys` | `{pane_id, keys: [...]}` — `esc`/`escape` for Escape |
-     | run a command | `pane.run` | text + Enter in one call |
-     | wait for output | `pane.wait_for_output` | `{pane_id, match: {type: substring\|regex, value}, timeout_ms?}` |
-     | live streaming | `events.subscribe` | `{subscriptions: [{type: "pane.updated"}, ...]}` → replies `{"result":{"type":"subscription_started"}}`, then events stream on the same connection |
+     | send keystrokes | `pane.send_input` | `{pane_id, text}` raw bytes — what typing uses |
+     | send special keys | `pane.send_keys` | `{pane_id, keys: [...]}` — named keys such as `Enter`, `C-c`, `escape` |
+     | other useful methods | `pane.run`, `pane.wait_for_output` | exist in the schema but are unused by Terminal Fly |
+   - **Correction to the first draft of this section:** it claimed `events.subscribe` would stream pane output. It does not. See "no output-streaming API" below — the implementation polls instead.
+   - **One request per connection.** The server answers once and closes; a second request on the same socket gets a broken pipe. So a persistent socket correlated by `id` is only useful for a single call. `events.subscribe` is the exception: it holds the connection open and serves no requests.
+   - **No output-streaming API.** The 27 subscribable event types are metadata only — `pane.updated` fires for title/cwd/focus/status changes, *not* for plain output (verified: zero events arrived after writing to an idle focused pane). The bridge therefore **polls** `pane.read(source:"visible", format:"ansi")` every 0.4s and repaints only when the text changes.
+   - `source:"recent"` returns empty on a pane that has not scrolled — use `source:"visible"`.
+   - `HERDR_SOCKET` overrides the socket path, which is what lets the tests point at a dead socket and assert the fallback.
    - **Live evidence**: `pane.list` returned 3 panes with `pane_id`, `agent`, `agent_status`,
      `cwd`, `focused`, `terminal_title`; `pane.read` returned pane text; unknown methods return a
      JSON error listing valid variants.
@@ -345,3 +388,7 @@ Settings window:
   - **Build deviation from plan:** plan assumed XcodeGen + `xcodebuild`, but this machine has Command Line Tools only — `xcodebuild` is unavailable and SwiftPM is broken (its bundled `libPackageDescription.dylib` is missing symbols, so every `Package.swift` fails to link). `scripts/build.sh` compiles with `swiftc` directly, runs SwiftTerm's SPM plugin binary by hand, and assembles the bundle. Same sources.
   - **Blocker found during Step 3:** the old `~/.hammerspoon/figma_pin.lua` prototype (from the kitty setup) binds the same four hotkeys and silently wins, because Hammerspoon starts first at login. Carbon reports success regardless. **`figma_pin.lua` must be disabled** or Terminal Fly's hotkeys will never fire on this machine.
   - **Still open:** notarization needs an Apple Developer ID cert (tooling ready: `scripts/make-dmg.sh --notarize`); launch-at-login (`SMAppService`) untested, needs the app in `/Applications`; multi-display re-parking verified by unit test only (single-display machine). Step 8 (herdr) COMPLETE — IPC contract measured against herdr 0.8.2 and verified end to end.
+- 2026-09-27: **Step 8 (herdr) implemented and verified; CI added.** Head `a2ead2b` → `f764caa`. All four CI jobs green (`build`, `clt-only`, `shellcheck`, `icon`). New: `Sources/TerminalFly/Herdr/*.swift`, `Testing/HerdrTests.swift`. 151 tests. Two CI-driven fixes: the SwiftTerm submodule was pinned to tip-of-main (needs Swift 6.2 `Span`), repinned to the `v1.20.0` tag `5d14406`; and `-swift-version 6` is rejected by the older runner toolchain, so `build.sh` uses `5`. Added `scripts/verify.sh` because `build.sh | tail && echo OK` reported `tail`'s exit status and printed OK on failure. The `clt-only` CI job switches `xcode-select` to CommandLineTools and asserts Xcode is *not* selected, so the no-Xcode build is machine-verified rather than merely true on this laptop.
+- 2026-09-27: **Launch-at-login verified; Sparkle documented as deferred.** Commit `55b3835`. Correction to the `bcbc317` entry above: I had reported Step 7 complete, but Sparkle was listed in Step 7 and had never been implemented. It is now explicitly deferred (P2, blocked behind notarization) rather than silently missing. Launch-at-login was the opposite case — the code was complete but unproven; `--logintest` supplied the proof.
+- 2026-09-27: **Post-Step-8 review hardening (Step 9 above).** Commits `0cb2c54`, `8360c4c`. Three defects fixed: app launch blocking on a synchronous herdr call from `init`; `HerdrSession` callbacks firing off the main thread despite a comment claiming otherwise; and unsynchronized `lastScreen` mutation between the polling and typing paths. 151 → 157 tests, with the concurrency tests proven non-vacuous. Head `8360c4c`, CI green 4/4.
+- 2026-09-27: **Plan reconciled with the shipped code.** Corrected the herdr IPC section, which had listed `pane.send_text` and a streaming `events.subscribe`; the implementation sends input via `pane.send_input`/`pane.send_keys` and polls because no output-streaming event exists. Added [Remaining blockers](#remaining-blockers) and the [verified test surface](#verified-test-surface-2026-09-27-commit-8360c4c) table. Marked risks 5 and 6 as implemented. No code changed in this pass.

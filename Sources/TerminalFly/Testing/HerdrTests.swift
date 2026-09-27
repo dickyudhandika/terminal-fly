@@ -139,10 +139,10 @@ enum HerdrTests {
             TestHarness.expect(noLines["lines"] == nil, "lines omitted when unspecified")
             TestHarness.expect(noLines["source"] as? String == "visible", "source defaults to visible")
 
-            let input = HerdrProtocol.inputParams(paneID: "w5:p17", text: "ls -la")
-            TestHarness.expect(input["pane_id"] as? String == "w5:p17", "input carries pane_id")
-            TestHarness.expect(input["text"] as? String == "ls -la", "input carries text")
-            TestHarness.expect(input.count == 2, "input params are exactly pane_id + text")
+            let input = HerdrProtocol.textParams(paneID: "w5:p17", text: "ls -la")
+            TestHarness.expect(input["pane_id"] as? String == "w5:p17", "text carries pane_id")
+            TestHarness.expect(input["text"] as? String == "ls -la", "text carries text")
+            TestHarness.expect(input.count == 2, "text params are exactly pane_id + text")
 
             let keys = HerdrProtocol.keysParams(paneID: "w5:p17", keys: ["Enter"])
             TestHarness.expect((keys["keys"] as? [String])?.first == "Enter", "keys carried")
@@ -218,11 +218,11 @@ enum HerdrTests {
             let fake = FakeTransport()
             let session = HerdrSession(transport: fake)
             session.follow(paneID: "w1:p1")
-            fake.responses[.paneSendInput] = ["type": "ok"]
+            fake.responses[.paneSendText] = ["type": "ok"]
             fake.responses[.paneSendKeys] = ["type": "ok"]
 
             try! session.sendText("ls")
-            let textCall = fake.callsWithParams.last { $0.method == .paneSendInput }
+            let textCall = fake.callsWithParams.last { $0.method == .paneSendText }
             TestHarness.expect(textCall?.params["text"] as? String == "ls", "typed text sent")
             TestHarness.expect(textCall?.params["pane_id"] as? String == "w1:p1", "text sent to followed pane")
 
@@ -316,8 +316,8 @@ enum HerdrTests {
             TestHarness.expect(waited, "concurrent poll and input complete without deadlock")
             TestHarness.expect(session.followedPaneID == "w1:p1",
                 "concurrent input leaves the followed pane intact")
-            TestHarness.expect(fake.calls.filter { $0 == .paneSendInput }.count == 160,
-                "every keystroke reached the transport — got \(fake.calls.filter { $0 == .paneSendInput }.count), expected 160")
+            TestHarness.expect(fake.calls.filter { $0 == .paneSendText }.count == 160,
+                "every keystroke reached the transport — got \(fake.calls.filter { $0 == .paneSendText }.count), expected 160")
         }
 
         TestHarness.group("HerdrSession — disconnect handling") {

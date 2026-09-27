@@ -152,11 +152,12 @@ final class HerdrSession: @unchecked Sendable {
 
     // MARK: - Input
 
-    /// Sends literal text (no newline). herdr appends it to the pane's input.
+    /// Sends literal text to the pane's PTY. herdr writes it to stdin, so
+    /// `\r` and `\n` are interpreted by the shell — same as a real terminal.
     func sendText(_ text: String) throws {
         try queue.sync {
             guard let paneID = _followedPaneID else { return }
-            _ = try transport.call(.paneSendInput, params: HerdrProtocol.inputParams(
+            _ = try transport.call(.paneSendText, params: HerdrProtocol.textParams(
                 paneID: paneID, text: text
             ))
             // Our own input changes the screen; clear the cache so the next poll
