@@ -43,6 +43,12 @@ step "logic tests (--test, headless)"
 step "PTY selftest (--selftest)"
 "$BIN" --selftest || FAILED=1
 
+step "window-server tests (--uitest)"
+# Covers what only a real window server can show: Cmd+V reaching the shell, the
+# terminal starting below the title bar, and the corner radius as rendered
+# rather than as configured.
+"$BIN" --uitest || FAILED=1
+
 step "herdr fallback (--herdr-test against a dead socket)"
 # Exit 0 = live herdr, 2 = unavailable (expected on most machines), 1 = real
 # failure. Only 1 is a problem, so this asserts the exit code explicitly rather

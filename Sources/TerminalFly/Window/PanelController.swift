@@ -27,6 +27,12 @@ final class PanelController {
     /// Which view currently fills the panel.
     private var contentView = NSView()
 
+    /// The window's corner radius, in points.
+    ///
+    /// Sharper than the macOS default (18pt for this style mask as of
+    /// macOS 26), which suits a terminal overlay better than the stock look.
+    static let cornerRadius: CGFloat = 8
+
     init(configuration: ShellConfiguration = .default()) {
         let defaultFrame = NSRect(x: 0, y: 0, width: 620, height: 320)
 
@@ -79,6 +85,7 @@ final class PanelController {
         // Content: the SwiftTerm surface, pinning its own edges.
         surface = TerminalSurface(frame: defaultFrame, configuration: configuration)
         showStandalone()
+        applyCornerRadius()
 
         positions.restore()
     }
@@ -118,13 +125,56 @@ final class PanelController {
         }
         view.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(view)
+
+        // Pin to the safe-area guide, not the content view's own edges.
+        //
+        // `.fullSizeContentView` + `titlebarAppearsTransparent` make
+        // `contentView` span the whole window, title bar included, so its top
+        // edge sits *under* the traffic-light buttons. The safe-area guide is
+        // inset by the title bar height (24pt here), which is what keeps the
+        // first line or two of shell output from being swallowed by the buttons.
+        let guide = contentView.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            view.topAnchor.constraint(equalTo: contentView.topAnchor),
-            view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+            view.topAnchor.constraint(equalTo: guide.topAnchor),
+            view.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
         ])
         panel.contentView = contentView
+    }
+
+    // MARK: - Appearance
+
+    /// Applies `Self.cornerRadius` to the window.
+    ///
+    /// This is the one place the app reaches for a private AppKit selector, and
+    /// it is not a preference: AppKit has no public API for a window's corner
+    /// radius. The public alternatives were measured, not guessed, and both fail:
+    ///
+    ///  * `contentView.layer.cornerRadius` — the content view sits *inside* the
+    ///    window frame, which AppKit draws and masks itself, and the frame's
+    ///    radius wins. A window set to 20pt this way still screenshots as 18pt.
+    ///  * `contentView.superview.layer.cornerRadius` (the theme frame) — this
+    ///    does alter the silhouette, but only as a layer mask. macOS 26 gives
+    ///    the theme frame a glass edge whose highlight is drawn outside that
+    ///    mask, so the mask shaves the frame without producing a clean corner.
+    ///  * `NSViewCornerConfiguration` — the supported-looking modern API, but it
+    ///    is not on `NSThemeFrame` in this SDK, so Swift cannot call it here.
+    ///
+    /// `NSWindow._setCornerRadius:` is `-setCornerRadius:` taking a `double`. It
+    /// drives the same `_cornerPath` / `_cornerMask` the real corner uses, and
+    /// was measured to render an exact 8pt silhouette, to survive resize and
+    /// hide/show, and to leave a matching — not stale — shadow.
+    ///
+    /// The lookup is guarded so a future macOS that drops the selector leaves
+    /// the panel with its system corner instead of crashing.
+    private func applyCornerRadius() {
+        let selector = Selector(("_setCornerRadius:"))
+        guard panel.responds(to: selector) else { return }
+        panel.perform(selector, with: Self.cornerRadius)
+        // The shadow path is derived from the corner radius; without this the
+        // old, larger path lingers until something else invalidates it.
+        panel.invalidateShadow()
     }
 
     var isVisible: Bool { panel.isVisible }
