@@ -113,13 +113,14 @@ enum GeometryTests {
         }
 
         TestHarness.group("PanelGeometry — size clamp safety net") {
-            // Too big on both axes: back down to the ceiling, origin untouched.
+            // Too big on both axes: back down to the ceiling, and pulled back
+            // inside the screen (its right edge cannot stay at x=4100).
             let oversized = CGRect(x: 100, y: 100, width: 4000, height: 4000)
             let shrunkToMax = PanelGeometry.clamped(oversized, in: screen)
             TestHarness.equal(shrunkToMax.size, PanelGeometry.maximumSize(in: screen),
                               "an oversized frame clamps to maximumSize")
-            TestHarness.equal(shrunkToMax.origin, oversized.origin,
-                              "the clamp corrects size only, never position")
+            TestHarness.expect(PanelGeometry.isFullyVisible(shrunkToMax, in: screen),
+                               "an oversized frame ends up entirely on screen")
 
             // Too small on both axes: back up to the usable minimum.
             let undersized = CGRect(x: 100, y: 100, width: 10, height: 10)
@@ -132,6 +133,47 @@ enum GeometryTests {
             let fitting = PanelGeometry.frame(for: .bottomRight, size: size, in: screen)
             TestHarness.equal(PanelGeometry.clamped(fitting, in: screen), fitting,
                               "a frame inside the limits is returned unchanged")
+        }
+
+        TestHarness.group("PanelGeometry — an off-screen position is pulled back") {
+            let hangingRight = CGRect(x: 1800, y: 400, width: 620, height: 320)
+            let fixedRight = PanelGeometry.clamped(hangingRight, in: screen)
+            TestHarness.equal(fixedRight.size, hangingRight.size,
+                              "a legal size is not touched by the position clamp")
+            TestHarness.equal(fixedRight.maxX, screen.maxX,
+                              "a frame hanging off the right is pulled to the edge")
+
+            let hangingBottom = CGRect(x: 400, y: -100, width: 620, height: 320)
+            TestHarness.equal(PanelGeometry.clamped(hangingBottom, in: screen).minY, screen.minY,
+                              "a frame hanging off the bottom is lifted back on screen")
+
+            let hangingTop = CGRect(x: 400, y: 900, width: 620, height: 320)
+            TestHarness.equal(PanelGeometry.clamped(hangingTop, in: screen).maxY, screen.maxY,
+                              "a frame poking above the visible area is pushed back under it")
+        }
+
+        TestHarness.group("PanelGeometry — growth from a mid-screen start stays on screen") {
+            // The reported bug: a small panel whose top edge sits low on the
+            // screen. Height grows from a pinned top edge, so without a position
+            // correction a legal 937pt panel still hangs off the bottom.
+            let low = CGRect(x: 24, y: 200, width: 620, height: 160)
+            let grown = PanelGeometry.resized(low, byHeightDelta: 10_000, in: screen)
+            TestHarness.equal(grown.height, screen.height - PanelGeometry.margin * 2,
+                              "the height still caps at the maximum")
+            TestHarness.equal(grown.minY, screen.minY,
+                              "the bottom edge is pulled back inside the visible frame")
+            TestHarness.expect(PanelGeometry.isFullyVisible(grown, in: screen),
+                               "growing from any starting position ends fully on screen")
+
+            // Same on the width axis: a free-floating panel grown past the edge.
+            let right = CGRect(x: 1500, y: 200, width: 620, height: 160)
+            let widened = PanelGeometry.resizedWidth(right, byWidthDelta: 10_000, in: screen)
+            TestHarness.equal(widened.width, screen.width - PanelGeometry.margin * 2,
+                              "the width still caps at the maximum")
+            TestHarness.equal(widened.maxX, screen.maxX,
+                              "the right edge is pulled back inside the visible frame")
+            TestHarness.expect(PanelGeometry.isFullyVisible(widened, in: screen),
+                               "widening from any starting position ends fully on screen")
         }
 
         TestHarness.group("PanelGeometry — saved-frame validation") {

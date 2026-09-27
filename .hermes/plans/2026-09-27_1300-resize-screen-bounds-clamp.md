@@ -386,9 +386,39 @@ Deviations from the steps above, all deliberate:
 8. **New test beyond the plan.** `PanelDelegate — a resize that escapes the
    limits is pulled back` proves `windowDidEndLiveResize` does the clamping: it
    lifts `maxSize` away, applies an oversize frame, asserts the frame really is
-   oversize (AppKit's `setFrame` does *not* enforce `maxSize` — only the
-   live-resize path does), fires the delegate, and asserts the result is exactly
-   `maximumSize`.
+   oversize, posts `NSWindow.didEndLiveResizeNotification`, and asserts the
+   result is exactly `maximumSize` and on screen.
+
+   Correction to the first draft of this note: `NSWindow.setFrame` **does**
+   enforce `maxSize` (measured: a 2372×1455 request came back as 1872×955, and
+   `constrainFrameRect` also moved the origin onto the screen). That is why the
+   test has to lift the ceiling before it can exercise the delegate at all.
+   Posting the notification does reach the delegate — AppKit dispatches window
+   notifications through the shared `NotificationCenter`, so the test drives the
+   real callback path rather than calling the method by hand.
+
+## Follow-up: size clamp was not enough (same day)
+
+Reported after the commit: growing a *small* panel tall still left the bottom
+rows hidden below the screen. Reproduced the shape — a panel whose top edge sits
+low on the screen, grown to a height that is perfectly legal.
+
+Cause: two independent bounds, and only one was enforced. `maxSize` caps size;
+`PanelGeometry.resized()` pins the **top** edge, so the growth is pushed
+downwards. A 955pt panel with its top 127pt below the menu bar ends up entirely
+legal in size and ~79pt off the bottom. The user's screenshot measured 1002pt
+tall, which is above this display's 955pt ceiling — that part was the pre-fix
+binary still running (started 16:44, binary rebuilt 17:22), and `restore()` now
+repairs that saved frame on the next launch.
+
+Fix: `PanelGeometry.contained(_:in:)` — pulls a size-clamped frame back inside
+`visibleFrame`, moving it as little as possible. Applied in `resized`,
+`resizedWidth` and `clamped`, so every path that can produce a frame
+(hotkey, corner preset, restore, end-of-live-resize) ends fully on screen.
+
+`+10` logic checks (192), `+6` UI checks (53), including an oversize custom
+frame saved off-screen being restored both inside `maximumSize` and fully
+visible.
 
 Still unverified (needs the running app, Risk 3): `minimumWidth = 300` with
 SwiftTerm. Drag a panel to its narrowest size and run `htop`.

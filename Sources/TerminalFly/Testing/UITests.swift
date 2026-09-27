@@ -161,6 +161,32 @@ enum UITests {
                                   "minSize.height is the usable minimum height")
             }
 
+            TestHarness.group("PositionManager — an oversize saved frame comes back on screen") {
+                // Exactly the state the pre-fix build could leave behind: a frame
+                // bigger than the display, saved as a custom position. Launch must
+                // repair it, not restore a panel hanging off the screen.
+                let defaults = UserDefaults.standard
+                guard let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+                else {
+                    TestHarness.expect(false, "no screen available for the restore check")
+                    return
+                }
+                let maximum = PanelGeometry.maximumSize(in: visible)
+                defaults.set(NSStringFromRect(NSRect(x: visible.minX + 40,
+                                                     y: visible.minY - 200,
+                                                     width: maximum.width + 500,
+                                                     height: maximum.height + 500)),
+                             forKey: "panelFrame")
+                defaults.set(true, forKey: "panelUsesCustomFrame")
+
+                let restored = PanelController().panel.frame
+                TestHarness.expect(restored.width <= maximum.width + 1
+                                       && restored.height <= maximum.height + 1,
+                                   "the restored frame is inside maximumSize (\(NSStringFromRect(restored)))")
+                TestHarness.expect(PanelGeometry.isFullyVisible(restored, in: visible),
+                                   "the restored frame is entirely on screen")
+            }
+
             TestHarness.group("PanelController — width hotkeys change the real window") {
                 let controller = PanelController()
                 // Start from a known size: whatever a previous run persisted may
@@ -216,9 +242,10 @@ enum UITests {
                 let limits = controller.panel.maxSize
                 defer { controller.panel.maxSize = limits }
 
-                // Take AppKit's own constraint away so the oversize frame can
-                // exist at all: this isolates the delegate's safety net, which is
-                // what catches a drag whose ceiling moved mid-gesture.
+                // AppKit *does* enforce maxSize on `setFrame` (verified: an
+                // oversize request comes back at maxSize), so lift the ceiling to
+                // get an escaped frame at all. That isolation matters: it proves
+                // the delegate's clamp, not AppKit's, is what pulls the panel in.
                 controller.panel.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                                   height: CGFloat.greatestFiniteMagnitude)
                 let origin = controller.panel.frame.origin
@@ -230,15 +257,42 @@ enum UITests {
                 TestHarness.expect(controller.panel.frame.width > maximum.width,
                                    "the oversize frame was applied, so the clamp is what fixes it")
 
-                // Fire the delegate exactly as AppKit does when a mouse-up ends a
-                // live resize, rather than trusting AppKit to synthesise a drag.
-                let notification = Notification(name: NSWindow.didEndLiveResizeNotification,
+                // Post the notification a real mouse-up posts — AppKit dispatches
+                // window notifications through the shared center, so this reaches
+                // the delegate the same way a drag does.
+                NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification,
                                                 object: controller.panel)
-                (controller.panel.delegate as? PanelDelegate)?.windowDidEndLiveResize(notification)
 
                 let corrected = controller.panel.frame
                 TestHarness.equal(corrected.size, maximum,
                                   "windowDidEndLiveResize clamps the escape back to maximumSize")
+                TestHarness.expect(PanelGeometry.isFullyVisible(corrected, in: visible),
+                                   "the corrected frame is pulled back on screen too")
+            }
+
+            TestHarness.group("PanelController — growing from a mid-screen start stays on screen") {
+                let controller = PanelController()
+                guard let visible = (controller.panel.screen ?? NSScreen.main)?.visibleFrame
+                else {
+                    TestHarness.expect(false, "no screen available for the growth check")
+                    return
+                }
+                // The reported shape: a small panel with its top edge low on the
+                // screen, then ⌃⌥↓ held down. A size-only clamp still leaves it
+                // hanging off the bottom.
+                controller.panel.setFrame(NSRect(x: visible.minX + 40, y: visible.minY + 80,
+                                                 width: 400, height: 150),
+                                          display: false)
+                for _ in 0..<100 { controller.grow() }
+                let grown = controller.panel.frame
+                TestHarness.expect(grown.height <= PanelGeometry.maximumSize(in: visible).height + 1,
+                                   "repeated grow() stops at the height ceiling (got \(grown.height))")
+                TestHarness.expect(PanelGeometry.isFullyVisible(grown, in: visible),
+                                   "the panel is entirely on screen after growing from a low start (\(NSStringFromRect(grown)))")
+
+                for _ in 0..<100 { controller.growWidth() }
+                TestHarness.expect(PanelGeometry.isFullyVisible(controller.panel.frame, in: visible),
+                                   "and still entirely on screen after growing wider (\(NSStringFromRect(controller.panel.frame)))")
             }
 
             TestHarness.group("PreferencesStore — live appearance application") {

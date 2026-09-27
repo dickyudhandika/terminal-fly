@@ -55,7 +55,9 @@ All six are rebindable in Settings → Hotkeys.
 Resize is bounded by the display: `NSWindow.maxSize` / `minSize` are set from the
 current screen's `visibleFrame` (minus a 24pt margin), so neither a hotkey nor a
 mouse drag can take the panel past the menu bar, the Dock, or the screen edge.
-The limits are recomputed when the panel changes screen.
+Growth is also pulled back *onto* the screen: a small panel parked low, then
+grown to full height, would otherwise end up legal in size and hanging off the
+bottom edge. The limits are recomputed when the panel changes screen.
 
 Click the panel to type. Click anywhere else and focus returns to that app — the
 panel stays visible, it just stops taking keystrokes. That's the whole interaction
@@ -143,8 +145,8 @@ not a failure.
 Current state:
 
 ```
---test        PASS: 182 checks, 0 failures
---uitest      PASS: 47 checks, 0 failures
+--test        PASS: 192 checks, 0 failures
+--uitest      PASS: 53 checks, 0 failures
 --selftest    PASS
 --herdr-test  PASS (3 sequential requests, each on its own connection)
 --herdr-uitest PASS (render + input + fallback, in a real window)

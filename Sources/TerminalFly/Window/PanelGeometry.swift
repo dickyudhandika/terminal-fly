@@ -84,7 +84,7 @@ struct PanelGeometry {
         var result = frame
         result.origin.y -= (clamped - frame.height)
         result.size.height = clamped
-        return result
+        return contained(result, in: visibleFrame)
     }
 
     /// Grows or shrinks the width while keeping the margin-anchored edge fixed,
@@ -102,18 +102,36 @@ struct PanelGeometry {
         if anchoredToRight {
             result.origin.x = frame.maxX - clamped
         }
+        return contained(result, in: visibleFrame)
+    }
+
+    /// Pulls a size-clamped frame back inside `visibleFrame`, moving it as
+    /// little as possible.
+    ///
+    /// Needed because `maxSize` bounds a resize's *size* only. A panel whose top
+    /// edge sits well below the menu bar can grow to a perfectly legal height and
+    /// still hang off the bottom of the screen — AppKit never pulls a window back
+    /// on screen by itself, so the geometry has to.
+    private static func contained(_ frame: CGRect, in visibleFrame: CGRect) -> CGRect {
+        var result = frame
+        result.origin.x = min(max(result.minX, visibleFrame.minX),
+                              visibleFrame.maxX - result.width)
+        result.origin.y = min(max(result.minY, visibleFrame.minY),
+                              visibleFrame.maxY - result.height)
         return result
     }
 
-    /// Forces `frame`'s size into [minimum, `maximumSize(in:)`] and leaves its
-    /// origin alone. Safety net for a resize that somehow escaped AppKit's
-    /// `maxSize` constraint, and for a frame saved on a bigger display.
+    /// Forces `frame` inside `visibleFrame`: size into [minimum, `maximumSize`],
+    /// then position back onto the screen — staying as close to where the frame
+    /// already is as the limits allow.
     static func clamped(_ frame: CGRect, in visibleFrame: CGRect) -> CGRect {
         let maximum = maximumSize(in: visibleFrame)
-        var result = frame
-        result.size.width = max(minimumWidth, min(frame.width, maximum.width))
-        result.size.height = max(minimumHeight, min(frame.height, maximum.height))
-        return result
+        var sized = frame
+        sized.size.width = max(minimumWidth, min(frame.width, maximum.width))
+        sized.size.height = max(minimumHeight, min(frame.height, maximum.height))
+        // Position is corrected second: it needs the final size to know how much
+        // room is left.
+        return contained(sized, in: visibleFrame)
     }
 
     /// Whether `frame` still looks like it is parked in a corner rather than
