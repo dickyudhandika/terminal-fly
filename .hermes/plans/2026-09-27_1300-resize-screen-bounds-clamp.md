@@ -1,16 +1,31 @@
 # Fix: Panel resize has no screen-bounds limit
 
+**Status: shipped, confirmed on real hardware by the user (2026-09-27).** Commits
+`99fc890` (size clamp + width control) and `76649c4` (position clamp). Steps 1-9
+below are the *original* plan; each blockquote under a step and the
+[execution log](#execution-log--2026-09-27) record where the plan was wrong and
+what actually shipped. Read those before reusing any snippet — Steps 2, 4 and 5
+contain code that is incorrect as written.
+
 ## Goal
 Clamp panel width and height to the current screen's visible frame so the panel cannot be resized (by hotkey or mouse drag) beyond the monitor edges.
 
+*Amended after shipping:* the goal is not only a size bound but **the panel stays
+inside the visible area**. `maxSize` alone was insufficient — a panel whose top
+edge sits low on the screen can grow to a perfectly legal height and still hang
+off the bottom. See [Follow-up](#follow-up-size-clamp-was-not-enough-same-day).
+
 ## Current context / assumptions
-- Project: `~/Documents/terminal-fly/` — Swift macOS app, commit `30bd9cd`
-- Build: `bash scripts/build.sh release` → binary at `build/release/TerminalFly`
-- Tests: `build/release/TerminalFly --test` (headless logic), `--uitest` (window server)
+- Project: `~/Documents/terminal-fly/` — Swift macOS app, planned at commit `30bd9cd`, shipped at `76649c4`
+- Build: `bash scripts/build.sh release` → app bundle at `build/TerminalFly.app`
+- Tests: `build/TerminalFly.app/Contents/MacOS/TerminalFly --test` (headless logic), `--uitest` (needs a window server)
 - Verify: `bash scripts/verify.sh release` runs all checks
 - **No Xcode on this machine** — `swiftc` direct compile via `scripts/build.sh`
+- **A running instance shares the `UserDefaults` domain the tests use.** Size limits
+  only exist in the binary that is actually running, so relaunch before retesting a
+  visual fix — this cost one debugging round.
 
-### Root cause (two separate gaps)
+### Root cause (three separate gaps)
 
 **Gap 1 — Mouse drag resize is completely unbounded.**
 `PanelController.swift` line 35 creates the panel with `.resizable` style mask but never sets `panel.maxSize`. AppKit default is "no maximum." The user can drag the panel edge past the screen boundary, and the overflow is cropped/invisible. `PanelDelegate.swift` only saves the frame in `windowDidEndLiveResize` — it never clamps.
@@ -18,16 +33,38 @@ Clamp panel width and height to the current screen's visible frame so the panel 
 **Gap 2 — Hotkey height grow is clamped but width is not handled.**
 `PanelGeometry.resized()` (line 66) clamps height to `visibleFrame.height - margin * 2`. This works for height. But there is no width resize hotkey and no width clamp function. The user asked for "max width based on monitor resolution" — currently width can only change via mouse drag, which has no limit (Gap 1).
 
+**Gap 3 — A size bound is not a position bound. Found after shipping, not in the
+original analysis.**
+`resized()` pins the **top** edge, so growth is pushed downwards. A panel with its
+top edge below the menu bar can reach the maximum legal height and still hang off
+the bottom — `maxSize` satisfied, `visibleFrame` not. Nothing in the geometry
+guaranteed the position, and the fix does not rely on AppKit to: `contained(_:in:)`
+does it explicitly. (The user's screenshot measured 1002pt on a 955pt ceiling, so
+that capture was the pre-fix binary; the shape behind it is nevertheless real —
+`resized()` on a panel at `y = 200` grown to the 937pt maximum lands `minY` at
+-577, which is what the containment tests now pin down.)
+
 ### Key files
 - `Sources/TerminalFly/Window/PanelGeometry.swift` — pure geometry, clamping logic
-- `Sources/TerminalFly/Window/PanelController.swift` — panel creation, `grow()`/`shrink()`
-- `Sources/TerminalFly/Window/PositionManager.swift` — `adjustHeight(by:)`, applies frames
-- `Sources/TerminalFly/Window/PanelDelegate.swift` — `NSWindowDelegate`, frame persistence
+- `Sources/TerminalFly/Window/PanelController.swift` — panel creation, `grow()`/`shrink()`, `growWidth()`/`shrinkWidth()`
+- `Sources/TerminalFly/Window/PositionManager.swift` — `updateSizeLimits()`, `adjustHeight(by:)`, `adjustWidth(by:)`, applies frames
+- `Sources/TerminalFly/Window/PanelDelegate.swift` — `NSWindowDelegate`, frame persistence, `clampFrame` safety net
+- `Sources/TerminalFly/Hotkeys/Hotkey+Extensions.swift`, `HotkeyManager.swift` — width actions `⌃⌥→` / `⌃⌥←`
+- `Sources/TerminalFly/MenuBar/MenuBarController.swift` — Grow / Shrink, height and width
 - `Sources/TerminalFly/Testing/GeometryTests.swift` — headless geometry tests
 - `Sources/TerminalFly/Testing/UITests.swift` — window-server UI tests
+- `README.md` — shortcut table + the resize-bounds paragraph
 
 ## Architecture / proposed approach
 Set `panel.maxSize` and `panel.minSize` at creation and on screen change so AppKit itself enforces bounds during mouse drag. Add a `PanelGeometry.resizedWidth()` function mirroring the existing height clamp. Update `windowDidEndLiveResize` to clamp-and-correct if a drag somehow exceeded bounds (belt + suspenders). Add unit tests for width clamping and for the exact max-height value (current test only asserts `<= screen.height`, not the precise clamp).
+
+**As shipped, one layer more:** every frame-producing path (both hotkey axes, corner
+presets, `restore()`, end-of-live-resize) finishes with
+`PanelGeometry.contained(_:in:)`, which pulls a size-clamped frame back inside
+`visibleFrame` by the smallest possible movement. `maxSize` handles the drag;
+`contained` handles the position. Architecture otherwise unchanged, except
+`updateSizeLimits()` lives on `PositionManager` (which already owns the panel and
+the `didChangeScreenNotification` observer) rather than `PanelController`.
 
 ## Step-by-step tasks
 
@@ -57,6 +94,11 @@ cd ~/Documents/terminal-fly && bash scripts/build.sh release 2>&1 | tail -3
 ```
 
 ### Step 2: Set `maxSize` and `minSize` on the panel at creation
+> **Wrong as written.** The `?? CGRect(x: 0, y: 0, width: 1920, height: 1080)`
+> fallback invents a display; the shipped version returns early when no screen is
+> known, leaving AppKit's unconstrained default. The method also lives on
+> `PositionManager`. See [deviation 1 and 2](#execution-log--2026-09-27).
+
 **File:** `Sources/TerminalFly/Window/PanelController.swift`
 
 After line 68 (`panel.backgroundColor = ...`), add:
@@ -89,6 +131,12 @@ cd ~/Documents/terminal-fly && bash scripts/build.sh release 2>&1 | tail -3
 ```
 
 ### Step 3: Call `updateSizeLimits()` on screen change
+> **Superseded.** Neither variant shipped. `PositionManager` owns the limits *and*
+> the existing `NSWindow.didChangeScreenNotification` observer, so the update is
+> wired there: `init`, the screen-change observer, `move(to:)` (hence `cycleCorner`)
+> and `restore()`. That covers every path, not just the corner cycle.
+> See [deviation 1](#execution-log--2026-09-27).
+
 **File:** `Sources/TerminalFly/Window/PositionManager.swift`
 
 In the `move(to:)` method (find it with grep — it applies a corner frame and calls `applyFrame`), add after the frame is applied:
@@ -118,6 +166,12 @@ cd ~/Documents/terminal-fly && bash scripts/build.sh release 2>&1 | tail -3
 ```
 
 ### Step 4: Clamp frame in `windowDidEndLiveResize` as a safety net
+> **Partly wrong as written.** The closure's `?? CGRect(0, 0, frame.width,
+> frame.height)` fallback makes `maximumSize` = frame − 2×margin, so it *shrinks*
+> a panel by 48pt whenever no screen is known; shipped as an early return. The
+> arithmetic moved into `PanelGeometry.clamped(_:in:)`, and — added after the
+> first ship — that helper now corrects **position** as well as size.
+
 **File:** `Sources/TerminalFly/Window/PanelDelegate.swift`
 
 The delegate needs access to the screen's visible frame to clamp. Add a `clampFrame` callback:
@@ -186,6 +240,13 @@ cd ~/Documents/terminal-fly && bash scripts/build.sh release 2>&1 | tail -3
 ```
 
 ### Step 5: Add width clamp to `PanelGeometry.resized` — make it handle both axes
+> **Wrong as written, and it had no caller.** Leaving `result.origin.x` alone pins
+> the *left* edge, which fails this plan's own Step 6 `isFullyVisible(huge)`
+> assertion for a `.topRight` base (maxX lands at 3148 in a 1920-wide frame). The
+> shipped version pins the margin-anchored edge, and `resizedWidth` is reachable
+> through `adjustWidth(by:)` → `growWidth()` / `shrinkWidth()` → `⌃⌥→` / `⌃⌥←` +
+> menu items.
+
 **File:** `Sources/TerminalFly/Window/PanelGeometry.swift`
 
 Add a new method after `resized(_:byHeightDelta:in:)` (line 73):
@@ -251,6 +312,11 @@ TestHarness.group("PanelGeometry — maximumSize helper") {
 ```
 
 **Verify tests fail:**
+> Resolved as written-and-then-doubted: the exact max-height assertion **passed**
+> immediately (the existing height clamp was already correct — the loose `<=` was
+> hiding nothing), and the width group could **not** pass until the Step 5 anchor
+> bug was fixed. So the failing test pointed at Step 5, not at `resized()`.
+
 ```bash
 cd ~/Documents/terminal-fly && bash scripts/build.sh release 2>&1 | tail -3
 build/release/TerminalFly --test 2>&1 | grep -E "FAIL|max width|max height|maximumSize"
@@ -268,6 +334,15 @@ build/release/TerminalFly --test 2>&1 | tail -5
 If the exact max-height assertion fails, the clamp in `resized()` has a bug — investigate and fix.
 
 ### Step 7: Add UI test verifying `maxSize` is set
+> **Looser than it needed to be.** The planned checks do catch the broken build —
+> measured AppKit defaults are `maxSize = 3.4e38` (FLT_MAX) and `minSize = (0, 0)`,
+> so `<= expected + 1` and `>= minimumWidth` both fail pre-fix. But `<=` would also
+> pass a ceiling that is far too small (limits computed from the wrong display), and
+> `>=` passes anything oversized. The shipped group asserts exact equality against
+> `maximumSize` and both minima, and is joined by four more: real width/height
+> hotkey behaviour, an oversize custom frame restored on screen, growth from a
+> mid-screen start, and the end-of-live-resize clamp.
+
 **File:** `Sources/TerminalFly/Testing/UITests.swift`
 
 Find the existing resize test group (around line 111) and add after it:
@@ -305,6 +380,11 @@ cd ~/Documents/terminal-fly && bash scripts/verify.sh release 2>&1 | tail -5
 ```
 
 ### Step 9: Commit
+> **Narrowed.** `git add -A` would have swept in `.hermes/plans/2026-09-27_1200-…`,
+> an unrelated prior-session edit, so only the resize files, README and this plan
+> were staged. The work also landed as two commits — the position clamp is a
+> distinct fix with its own repro: `99fc890`, then `76649c4`.
+
 ```bash
 cd ~/Documents/terminal-fly && git add -A && git commit -m "Clamp panel resize to screen bounds
 
@@ -316,32 +396,61 @@ the max-height test from <= screen.height to the exact clamp value."
 
 ## Tests / validation
 
-| Step | Command | Expected output |
-|------|---------|-----------------|
-| 1-5 | `bash scripts/build.sh release 2>&1 \| tail -3` | `==> built .../TerminalFly.app` |
-| 6 | `build/release/TerminalFly --test 2>&1 \| tail -5` | `PASS: N checks, 0 failures` (N > 157) |
-| 7 | `build/release/TerminalFly --uitest 2>&1 \| tail -5` | PASS with new maxSize checks |
-| 8 | `bash scripts/verify.sh release 2>&1 \| tail -5` | `ALL CHECKS PASSED` |
+Planned vs. actual:
 
-Manual verification after implementation:
-1. Launch Terminal Fly
-2. Drag panel edge to grow — should stop at screen edge minus margin
-3. Use ⌃⌥↓ hotkey to grow height — should stop at max height
-4. Panel should never extend beyond visible screen area
+| Step | Command | Planned | Actual |
+|------|---------|---------|--------|
+| 1-5 | `bash scripts/build.sh release` | `==> built .../TerminalFly.app` | same |
+| 6 | `... --test` | `PASS: N checks` (N > 157) | `PASS: 192 checks, 0 failures` |
+| 7 | `... --uitest` | PASS with new maxSize checks | `PASS: 53 checks, 0 failures`, twice in a row |
+| 8 | `bash scripts/verify.sh release` | `ALL CHECKS PASSED` | `ALL CHECKS PASSED` |
+
+Manual verification after implementation — **all confirmed by the user on the
+shipped build**:
+1. Launch Terminal Fly ✅
+2. Drag panel edge to grow — should stop at screen edge minus margin ✅
+3. Use ⌃⌥↓ hotkey to grow height — should stop at max height ✅ (also ⌃⌥→ for width)
+4. Panel should never extend beyond visible screen area ✅ — **this is the one
+   `maxSize` alone did not deliver**; it needed `contained(_:in:)`. See
+   [Gap 3](#root-cause-three-separate-gaps).
 
 ## Risks, tradeoffs, and open questions
 
-1. **`maxSize` and multi-display** — When panel moves to a different screen, `maxSize` must be recalculated. Step 3 handles this for `cycleCorner()`, but if the user drags the panel to another screen manually, `windowDidMove` should also trigger `updateSizeLimits()`. Consider adding this to `PanelDelegate.windowDidMove` or `PositionManager`.
+1. **`maxSize` and multi-display** — RESOLVED, differently than planned. Limits are
+   recomputed in `PositionManager.updateSizeLimits()`, called from `init`, the
+   existing `NSWindow.didChangeScreenNotification` observer, `move(to:)`, and
+   `restore()` — so a manual drag to another display is covered without touching
+   `windowDidMove` (which fires continuously and would thrash the limits mid-drag).
 
-2. **`maxSize` vs drag position** — Setting `maxSize` constrains size but not position. A panel at max size dragged to straddle two screens could still overflow. The `clampFrame` safety net in Step 4 only clamps size, not position. This is acceptable — position overflow is a separate concern from the resize bug.
+2. **`maxSize` vs drag position** — Was written off as "a separate concern". **It
+   turned out to be the bug that was actually reported.** A size-only clamp let a
+   low-positioned panel grow legal and still hang off the bottom. Resolved by
+   `PanelGeometry.contained(_:in:)`, applied after every size clamp. What is still
+   open is *pure repositioning*: dragging an unchanged-size panel partly off screen
+   is not corrected until the next resize, deliberately — `windowDidMove` fires
+   throughout the drag and snapping there would fight the user.
 
-3. **`minSize` might conflict with terminal rendering** — If `minimumWidth = 300` is too narrow for SwiftTerm to render without errors, increase it. Verify by setting panel to min size and running `htop`.
+3. **`minSize` might conflict with terminal rendering** — OPEN. `minimumWidth = 300`
+   (~45 columns at the default size) is unverified against SwiftTerm. Shrink the
+   panel to its narrowest and run `htop`; raise the constant if it garbles.
 
-4. **Screen change during live resize** — If the user drags the panel across displays mid-resize, `maxSize` from the old screen applies until `windowDidEndLiveResize` fires. Edge case, unlikely to cause visible issues.
+4. **Screen change during live resize** — MITIGATED. The old screen's `maxSize`
+   applies during the gesture, but `windowDidEndLiveResize`'s clamp runs against
+   the *current* `visibleFrame` and `contained` fixes both axes, so the escape is
+   corrected on mouse-up. Not verified on real hardware: single-display machine.
+
+5. **Scope added beyond the plan** — width control did not exist at all, and a
+   `resizedWidth()` helper nobody calls is dead weight, so Step 5 was wired through
+   `adjustWidth(by:)` to `⌃⌥→` / `⌃⌥←` and the menu. Flagged during review as
+   feature drift against a clamping-only mandate; kept because it is the only
+   keyboard path to the width bound, is covered by tests, and the original ask was
+   "max width based on monitor resolution".
+
 ## Execution log — 2026-09-27
 
-Shipped. `--test` 182 checks / 0 failures (was 157), `--uitest` 47 checks / 0
-failures, `scripts/verify.sh release` → `ALL CHECKS PASSED`.
+Shipped, then amended: `--test` **192** checks / 0 failures, `--uitest` **53**
+checks / 0 failures (from 157 and 35), `scripts/verify.sh release` →
+`ALL CHECKS PASSED`. Commits `99fc890` (size clamp) + `76649c4` (position clamp).
 
 Deviations from the steps above, all deliberate:
 
@@ -384,10 +493,13 @@ Deviations from the steps above, all deliberate:
    clamp found no off-by-one — the existing height clamp was already correct, so
    the assertion is now a real regression guard.
 8. **New test beyond the plan.** `PanelDelegate — a resize that escapes the
-   limits is pulled back` proves `windowDidEndLiveResize` does the clamping: it
-   lifts `maxSize` away, applies an oversize frame, asserts the frame really is
-   oversize, posts `NSWindow.didEndLiveResizeNotification`, and asserts the
-   result is exactly `maximumSize` and on screen.
+   limits is pulled back`. The delegate net's job is not to catch `setFrame`
+   escaping — it does not — but to correct a frame that is already out of bounds
+   when the limits change under it: a frame saved before the limits existed, a
+   frame resized while the ceiling belonged to another display. To exercise that
+   path the test lifts `maxSize` away, applies an oversize frame, asserts the
+   frame really is oversize, posts `NSWindow.didEndLiveResizeNotification`, and
+   asserts the result is exactly `maximumSize` and on screen.
 
    Correction to the first draft of this note: `NSWindow.setFrame` **does**
    enforce `maxSize` (measured: a 2372×1455 request came back as 1872×955, and
@@ -421,4 +533,51 @@ frame saved off-screen being restored both inside `maximumSize` and fully
 visible.
 
 Still unverified (needs the running app, Risk 3): `minimumWidth = 300` with
-SwiftTerm. Drag a panel to its narrowest size and run `htop`.
+SwiftTerm. Drag a panel to its narrowest size and run `htop`. The user confirmed
+the growth clamping works on real hardware; the narrow-render case was not part
+of that check.
+
+## Shipped surface
+
+`PanelGeometry` (pure, headless-tested):
+
+| Member | Guarantees |
+|--------|-----------|
+| `margin = 24`, `minimumHeight = 120`, `minimumWidth = 300`, `resizeStep = 24` | the four numbers every clamp reads |
+| `maximumSize(in:)` | `visibleFrame` minus 2×margin on both axes |
+| `resized(_:byHeightDelta:in:)` | height capped, top edge pinned, then contained |
+| `resizedWidth(_:byWidthDelta:in:)` | width capped, margin-anchored edge pinned, then contained |
+| `clamped(_:in:)` | size into `[minimum, maximumSize]`, then contained |
+| `contained(_:in:)` *(private)* | smallest origin move that puts the frame fully inside `visibleFrame` |
+
+`PositionManager`: `updateSizeLimits()` (AppKit's `maxSize` / `minSize`),
+`adjustHeight(by:)`, `adjustWidth(by:)`. `PanelDelegate`: `clampFrame` closure,
+applied in `windowDidEndLiveResize`. `PanelController`: `grow` / `shrink` /
+`growWidth` / `shrinkWidth`. `HotkeyAction`: `increaseWidth` (`⌃⌥→`),
+`decreaseWidth` (`⌃⌥←`).
+
+Three layers, each with a distinct job — keep all three:
+1. `maxSize` / `minSize` → bounds a **mouse drag** while it happens (AppKit).
+2. `resized` / `resizedWidth` → bounds a **hotkey** before the frame is applied.
+3. `contained` → bounds **position**, which neither of the above can do.
+
+AppKit behaviour measured on this machine (1920×1080, menu bar + Dock →
+`visibleFrame = (0, 47, 1920, 1003)`, so `maximumSize = (1872, 955)`):
+
+| Fact | Consequence |
+|------|-------------|
+| Default `maxSize` is FLT_MAX, default `minSize` is `(0, 0)` | unset limits mean *no* drag bound — the original Gap 1 |
+| `setFrame` clamps an oversize request to `maxSize` (measured: 2372×1455 → 1872×955) | the size ceiling holds for programmatic frames too, not just live drags |
+| AppKit's own frame placement does not bound position to `visibleFrame` | observed directly: the reported panel sat with rows under the Dock at a size that was legal — `contained` is what closes that |
+| Posting `NSWindow.didEndLiveResizeNotification` reaches `windowDidEndLiveResize` | tests can drive the real mouse-up callback without a human |
+
+## Changelog
+
+- 2026-09-27: **Plan executed + amended, confirmed on hardware.** `99fc890` set
+  `maxSize`/`minSize` from `visibleFrame`, added `maximumSize`, `clamped`,
+  `resizedWidth` and an end-of-`live-resize` clamp, and wired width control
+  (`⌃⌥→`/`⌃⌥←`, menu) so `resizedWidth` was not dead code. `76649c4` added
+  `contained(_:in:)` after the reported case showed a size bound is not a position
+  bound. Steps 2/4/5 of this plan contained bugs as written — each is annotated in
+  place and reconciled in the [execution log](#execution-log--2026-09-27).
+  Logic checks 157 → 192, UI checks 35 → 53.
