@@ -75,12 +75,23 @@ binary manually, and assembles the bundle by hand. Same sources, same result, no
 Xcode.
 
 ```bash
-./scripts/build.sh debug      # fast iteration
-./scripts/build.sh release    # optimised
-./scripts/make-icon.py        # regenerate the icon (needs Pillow)
-./scripts/make-dmg.sh         # package a DMG
+./scripts/verify.sh            # build + assert binary/bundle + --test + --selftest
+./scripts/build.sh debug       # fast iteration
+./scripts/build.sh release     # optimised
+./scripts/make-icon.py         # regenerate the icon (needs Pillow)
+./scripts/make-dmg.sh          # package a DMG
 ./scripts/make-dmg.sh --notarize   # + notarize (needs credentials)
 ```
+
+Use `verify.sh` rather than piping `build.sh` into `tail` — a pipeline returns
+the last command's status, so a failed build would still look like it succeeded.
+
+### Dependency pin
+
+SwiftTerm is a submodule pinned to the **v1.20.0 release tag**, not `main`. The
+releases are the API surface this app is written against; tip-of-main uses
+`Span` (Swift 6.2+) and other unreleased types, which fails to compile on older
+toolchains and would make the project build only for people on the newest Xcode.
 
 ## Testing
 
@@ -101,7 +112,13 @@ Current state:
 ```
 --test     PASS: 80 checks, 0 failures
 --uitest   PASS: 35 checks, 0 failures
+--selftest PASS
 ```
+
+CI runs on every push: `build` and `clt-only` both build in release and run
+`--test`, where `clt-only` switches `xcode-select` to CommandLineTools first and
+asserts Xcode is *not* selected. So the CLT-only claim above is machine-checked,
+not just true on the author's laptop.
 
 Geometry is deliberately kept in a pure, AppKit-free type (`PanelGeometry`) so
 corner maths is testable without a window server. `PositionManager` is the thin
