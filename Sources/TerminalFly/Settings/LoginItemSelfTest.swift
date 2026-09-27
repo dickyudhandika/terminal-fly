@@ -59,10 +59,9 @@ enum LoginItemSelfTest {
         check(service.status != initial || initial == .enabled,
               "status changed from its initial value")
 
-        // --- the login item should actually be listed by the system ---
-        let listed = SMAppService.openSystemSettingsLoginItems()
-        _ = listed // opens the pane; the authoritative check is `status` above
-        check(true, "system settings login-items pane can be opened")
+        // Deliberately no `SMAppService.openSystemSettingsLoginItems()` check
+        // here: it asserts nothing and pops the user's System Settings window
+        // open as a side effect of running a self-test.
 
         // --- unregister must be the inverse ---
         do {

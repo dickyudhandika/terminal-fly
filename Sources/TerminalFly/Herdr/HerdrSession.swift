@@ -24,7 +24,20 @@ extension HerdrClient: HerdrTransport {}
 /// So the bridge polls `pane.read(source: "visible")` and repaints only when the
 /// text actually changes. `minimumPollInterval` is therefore a latency knob, not
 /// a correctness one.
-final class HerdrSession {
+///
+/// ## Thread safety
+///
+/// Every access to mutable state goes through the serial `queue`, which is what
+/// justifies `@unchecked Sendable`. That matters because polling runs on a
+/// background timer while typing arrives on the main thread: without
+/// serialization a poll and a keystroke race on `lastScreen`, and two slow polls
+/// can overlap and both repaint.
+///
+/// Callbacks (`onScreenChange` etc.) fire *from inside* the queue, so callers
+/// must hop to the main queue themselves — the coordinator does. Never call back
+/// into the session synchronously from a callback; that would deadlock on the
+/// non-reentrant serial queue.
+final class HerdrSession: @unchecked Sendable {
     /// What the panel should be showing right now.
     enum State: Equatable {
         case connected(paneID: String)
@@ -39,19 +52,29 @@ final class HerdrSession {
     /// cheap enough that it is not worth being cleverer.
     let minimumPollInterval: TimeInterval = 0.4
 
-    private(set) var state: State = .disconnected(reason: "not started")
-    private(set) var panes: [HerdrProtocol.Pane] = []
-    private(set) var followedPaneID: String?
+    /// Serializes all mutable state below. See "Thread safety" above.
+    private let queue = DispatchQueue(label: "terminalfly.herdr.session")
+
+    private var _state: State = .disconnected(reason: "not started")
+    private var _panes: [HerdrProtocol.Pane] = []
+    private var _followedPaneID: String?
 
     /// Last screen text we handed out — the redraw suppression.
     private var lastScreen: String?
 
-    /// Delivered (on the main queue) whenever the pane's visible contents change.
+    /// Delivered (from inside the queue) whenever the pane's visible contents
+    /// change. Hop to the main queue before touching UI.
     var onScreenChange: ((String) -> Void)?
-    /// Delivered (on the main queue) when the pane list changes.
+    /// Delivered (from inside the queue) when the pane list changes.
     var onPanesChange: (([HerdrProtocol.Pane]) -> Void)?
-    /// Delivered (on the main queue) on connect/disconnect.
+    /// Delivered (from inside the queue) on connect/disconnect.
     var onStateChange: ((State) -> Void)?
+
+    // MARK: - Read-only views
+
+    var state: State { queue.sync { _state } }
+    var panes: [HerdrProtocol.Pane] { queue.sync { _panes } }
+    var followedPaneID: String? { queue.sync { _followedPaneID } }
 
     init(transport: HerdrTransport) {
         self.transport = transport
@@ -67,32 +90,38 @@ final class HerdrSession {
     /// can decide between falling back and showing an error.
     @discardableResult
     func refreshPanes() throws -> [HerdrProtocol.Pane] {
-        let value = try transport.call(.paneList, params: [:])
-        let decoded = try HerdrProtocol.decodePaneList(value)
-        if decoded != panes {
-            panes = decoded
-            onPanesChange?(decoded)
+        try queue.sync {
+            let value = try transport.call(.paneList, params: [:])
+            let decoded = try HerdrProtocol.decodePaneList(value)
+            if decoded != _panes {
+                _panes = decoded
+                onPanesChange?(decoded)
+            }
+            return decoded
         }
-        return decoded
     }
 
     /// The pane herdr itself has focused — the natural default when the user has
     /// not picked one.
     var focusedPane: HerdrProtocol.Pane? {
-        panes.first(where: { $0.focused }) ?? panes.first
+        queue.sync { _panes.first(where: { $0.focused }) ?? _panes.first }
     }
 
     /// Begins following a pane. Resets the redraw cache so the first poll always
     /// paints, even if the screen happens to match a previous pane's text.
     func follow(paneID: String) {
-        followedPaneID = paneID
-        lastScreen = nil
-        update(.connected(paneID: paneID))
+        queue.sync {
+            _followedPaneID = paneID
+            lastScreen = nil
+            update(.connected(paneID: paneID))
+        }
     }
 
     func unfollow() {
-        followedPaneID = nil
-        lastScreen = nil
+        queue.sync {
+            _followedPaneID = nil
+            lastScreen = nil
+        }
     }
 
     // MARK: - Polling
@@ -100,45 +129,51 @@ final class HerdrSession {
     /// Reads the followed pane once. Returns the screen text when it changed
     /// since the last poll, `nil` when nothing changed (or nothing is followed).
     ///
-    /// Called directly by tests; `startPolling` drives it on a timer in the app.
+    /// Called directly by tests; the app drives it from a timer.
     @discardableResult
     func pollOnce() throws -> String? {
-        guard let paneID = followedPaneID else { return nil }
+        try queue.sync {
+            guard let paneID = _followedPaneID else { return nil }
 
-        let value = try transport.call(.paneRead, params: HerdrProtocol.readParams(
-            paneID: paneID,
-            source: "visible",
-            stripANSI: false,
-            format: "ansi"
-        ))
-        let text = try HerdrProtocol.decodePaneText(value)
+            let value = try transport.call(.paneRead, params: HerdrProtocol.readParams(
+                paneID: paneID,
+                source: "visible",
+                stripANSI: false,
+                format: "ansi"
+            ))
+            let text = try HerdrProtocol.decodePaneText(value)
 
-        guard text != lastScreen else { return nil }
-        lastScreen = text
-        onScreenChange?(text)
-        return text
+            guard text != lastScreen else { return nil }
+            lastScreen = text
+            onScreenChange?(text)
+            return text
+        }
     }
 
     // MARK: - Input
 
     /// Sends literal text (no newline). herdr appends it to the pane's input.
     func sendText(_ text: String) throws {
-        guard let paneID = followedPaneID else { return }
-        _ = try transport.call(.paneSendInput, params: HerdrProtocol.inputParams(
-            paneID: paneID, text: text
-        ))
-        // Our own input changes the screen; clear the cache so the next poll
-        // repaints immediately instead of waiting for a difference.
-        lastScreen = nil
+        try queue.sync {
+            guard let paneID = _followedPaneID else { return }
+            _ = try transport.call(.paneSendInput, params: HerdrProtocol.inputParams(
+                paneID: paneID, text: text
+            ))
+            // Our own input changes the screen; clear the cache so the next poll
+            // repaints immediately instead of waiting for a difference.
+            lastScreen = nil
+        }
     }
 
     /// Sends named keys, e.g. `["Enter"]`, `["C-c"]`.
     func sendKeys(_ keys: [String]) throws {
-        guard let paneID = followedPaneID else { return }
-        _ = try transport.call(.paneSendKeys, params: HerdrProtocol.keysParams(
-            paneID: paneID, keys: keys
-        ))
-        lastScreen = nil
+        try queue.sync {
+            guard let paneID = _followedPaneID else { return }
+            _ = try transport.call(.paneSendKeys, params: HerdrProtocol.keysParams(
+                paneID: paneID, keys: keys
+            ))
+            lastScreen = nil
+        }
     }
 
     // MARK: - Lifecycle
@@ -146,19 +181,26 @@ final class HerdrSession {
     /// Records a transport failure. Only a genuinely dead herdr leaves herdr
     /// mode; a protocol-level error keeps the connection and surfaces the error.
     func handleFailure(_ error: Error) {
-        guard let herdrError = error as? HerdrError, herdrError.isUnavailable else { return }
-        unfollow()
-        update(.disconnected(reason: herdrError.description))
+        queue.sync {
+            guard let herdrError = error as? HerdrError, herdrError.isUnavailable else { return }
+            _followedPaneID = nil
+            lastScreen = nil
+            update(.disconnected(reason: herdrError.description))
+        }
     }
 
     func markDisconnected(reason: String) {
-        unfollow()
-        update(.disconnected(reason: reason))
+        queue.sync {
+            _followedPaneID = nil
+            lastScreen = nil
+            update(.disconnected(reason: reason))
+        }
     }
 
+    /// Caller must already hold `queue`.
     private func update(_ newState: State) {
-        guard newState != state else { return }
-        state = newState
+        guard newState != _state else { return }
+        _state = newState
         onStateChange?(newState)
     }
 }

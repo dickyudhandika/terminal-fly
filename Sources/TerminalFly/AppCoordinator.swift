@@ -22,6 +22,10 @@ final class AppCoordinator: NSObject {
     private var herdrSession: HerdrSession?
     private var herdrPollTimer: Timer?
 
+    /// Last known pane list, populated off the main thread by `refreshHerdrPanes()`.
+    /// The menu reads this so building the menu never blocks on the socket.
+    private var cachedHerdrPanes: [HerdrProtocol.Pane] = []
+
     /// True while the panel is showing a herdr pane instead of its own shell.
     private(set) var isHerdrMode = false
 
@@ -43,6 +47,10 @@ final class AppCoordinator: NSObject {
 
     func start() {
         controller.show()
+        // Populate the herdr pane list in the background. Deliberately in `start()`
+        // rather than `init`: the menu reads a cache, and this is the earliest point
+        // where I/O is safe.
+        refreshHerdrPanes()
     }
 
     // MARK: - herdr mode (Step 8)
@@ -101,6 +109,7 @@ final class AppCoordinator: NSObject {
         startHerdrPolling()
         // Paint immediately rather than waiting a full tick.
         pollHerdrOnce()
+        cachedHerdrPanes = session.panes
         refreshMenuBar()
         return nil
     }
@@ -114,18 +123,24 @@ final class AppCoordinator: NSObject {
         refreshMenuBar()
     }
 
+    /// Wires session callbacks.
+    ///
+    /// Callbacks fire from *inside* the session's serial queue — which is a
+    /// background thread during polling — so every body here hops to the main
+    /// queue before touching AppKit. None of them call back into `session`
+    /// synchronously, which would deadlock the non-reentrant queue.
     private func wireHerdrCallbacks(_ session: HerdrSession) {
         session.onScreenChange = { [weak self] screen in
-            self?.controller.herdrSurface?.show(screen: screen)
+            DispatchQueue.main.async {
+                self?.controller.herdrSurface?.show(screen: screen)
+            }
         }
         session.onStateChange = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .connected:
-                break // the screen callback does the visible work
-            case let .disconnected(reason):
-                // herdr vanished: show why, then hand the panel back to a working
-                // shell so the user is never left with a dead pane.
+            guard case let .disconnected(reason) = state else { return }
+            // herdr vanished: show why, then hand the panel back to a working
+            // shell so the user is never left with a dead pane.
+            DispatchQueue.main.async {
+                guard let self else { return }
                 self.controller.herdrSurface?.showStatus("herdr disconnected: \(reason)\n\nFalling back to a local shell.")
                 self.stopHerdrPolling()
                 self.isHerdrMode = false
@@ -148,22 +163,17 @@ final class AppCoordinator: NSObject {
         herdrPollTimer = nil
     }
 
-    /// One poll tick. A socket read is blocking, so this runs off the main thread
-    /// and hops back to apply the result — a local socket is fast, but blocking
-    /// the main thread on every tick would stutter the panel.
+    /// One poll tick. A socket read is blocking, so this runs off the main thread.
+    ///
+    /// Painting is handled by `onScreenChange`, which the session fires from
+    /// inside the poll — so there is deliberately no second paint here.
     private func pollHerdrOnce() {
         guard let session = herdrSession, isHerdrMode else { return }
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let changed: String?
+        DispatchQueue.global(qos: .utility).async {
             do {
-                changed = try session.pollOnce()
+                _ = try session.pollOnce()
             } catch {
-                DispatchQueue.main.async { self?.herdrSession?.handleFailure(error) }
-                return
-            }
-            guard let changed else { return } // nothing changed; nothing to paint
-            DispatchQueue.main.async {
-                self?.controller.herdrSurface?.show(screen: changed)
+                session.handleFailure(error)
             }
         }
     }
@@ -302,7 +312,10 @@ final class AppCoordinator: NSObject {
             onOpenSettings: { [weak self] in self?.openSettings() },
             onRestartShell: { [weak self] in self?.restartShell() },
             onQuit: { NSApp.terminate(nil) },
-            herdrPanes: herdrPanesForMenu(),
+            // Read from the cache, never from the socket: `buildMenu()` runs inside
+            // `init`, so a blocking call here would stall app launch for the whole
+            // socket timeout whenever herdr is present but wedged.
+            herdrPanes: cachedHerdrPanes,
             isHerdrMode: isHerdrMode,
             // Only offered when herdr is actually installed — a nil handler hides
             // the whole section rather than showing a dead menu.
@@ -316,21 +329,31 @@ final class AppCoordinator: NSObject {
         )
     }
 
-    /// Panes for the menu. Read synchronously: this is a local socket round-trip
-    /// on a user-initiated menu open, and the menu is rebuilt right after, so an
-    /// async refresh would render a stale list.
-    private func herdrPanesForMenu() -> [HerdrProtocol.Pane] {
-        guard herdrAvailable else { return [] }
-        // Reuse the live session when there is one; otherwise open a throwaway
-        // client just to enumerate panes.
-        if let session = herdrSession, (try? session.refreshPanes()) != nil {
-            return session.panes
+    /// Refreshes `cachedHerdrPanes` off the main thread.
+    ///
+    /// The menu is built synchronously (and once inside `init`), so it must never
+    /// touch the socket. This populates the cache in the background and rebuilds
+    /// the menu when the list arrives.
+    func refreshHerdrPanes() {
+        guard herdrAvailable else {
+            cachedHerdrPanes = []
+            return
         }
-        do {
-            let value = try HerdrClient().call(.paneList, params: [:])
-            return try HerdrProtocol.decodePaneList(value)
-        } catch {
-            return []
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            // A short timeout keeps a wedged-but-present herdr from tying up the
+            // background thread; nothing depends on this call completing.
+            let panes: [HerdrProtocol.Pane]
+            do {
+                let value = try HerdrClient().call(.paneList, params: [:], timeout: 1.5)
+                panes = try HerdrProtocol.decodePaneList(value)
+            } catch {
+                panes = []
+            }
+            DispatchQueue.main.async {
+                guard let self, panes != self.cachedHerdrPanes else { return }
+                self.cachedHerdrPanes = panes
+                self.refreshMenuBar()
+            }
         }
     }
 

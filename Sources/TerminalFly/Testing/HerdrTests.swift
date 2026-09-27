@@ -247,6 +247,79 @@ enum HerdrTests {
             TestHarness.expect(true, "input without a followed pane is a no-op")
         }
 
+        TestHarness.group("HerdrSession — concurrent polls are serialized") {
+            // The app polls on a background timer while keystrokes arrive on the
+            // main thread. Without the serial queue, two pollers can both read the
+            // same screen and both compare it against a stale `lastScreen`, so a
+            // single change gets painted twice (and the redraw suppression breaks).
+            let fake = FakeTransport()
+            fake.readResponses = ["s1\n", "s2\n", "s3\n", "s4\n"]
+
+            let session = HerdrSession(transport: fake)
+            let lock = NSLock()
+            var screens: [String] = []
+            session.onScreenChange = { screen in
+                lock.lock()
+                screens.append(screen)
+                lock.unlock()
+            }
+            session.follow(paneID: "w1:p1")
+
+            // 16 threads each draining the poll path.
+            let group = DispatchGroup()
+            for _ in 0..<16 {
+                group.enter()
+                DispatchQueue.global().async {
+                    for _ in 0..<10 { _ = try? session.pollOnce() }
+                    group.leave()
+                }
+            }
+            group.wait()
+
+            // The fake holds at its last entry once exhausted, so the only possible
+            // correct outcome is one redraw per distinct screen: exactly 4.
+            TestHarness.expect(screens.count == 4,
+                "each distinct screen redraws exactly once — got \(screens.count), expected 4")
+            TestHarness.expect(screens == ["s1\n", "s2\n", "s3\n", "s4\n"],
+                "screens arrive in order with no duplicates — got \(screens)")
+            TestHarness.expect(session.followedPaneID == "w1:p1",
+                "concurrent polls leave the followed pane intact")
+        }
+
+        TestHarness.group("HerdrSession — concurrent input and polling") {
+            // Typing on the main thread while the poll timer fires must not corrupt
+            // session state. `sendText` deliberately clears the redraw cache, so the
+            // invariant here is stability: the followed pane survives, input keeps
+            // reaching the transport, and nothing deadlocks the serial queue.
+            let fake = FakeTransport()
+            fake.readResponses = ["only\n"]
+
+            let session = HerdrSession(transport: fake)
+            session.follow(paneID: "w1:p1")
+
+            let group = DispatchGroup()
+            for _ in 0..<8 {
+                group.enter()
+                DispatchQueue.global().async {
+                    for _ in 0..<20 { _ = try? session.pollOnce() }
+                    group.leave()
+                }
+                group.enter()
+                DispatchQueue.global().async {
+                    for _ in 0..<20 { try? session.sendText("x") }
+                    group.leave()
+                }
+            }
+            // `group.wait()` returning at all is the deadlock check.
+            let waited = group.wait(timeout: .now() + 10) == .success
+
+            TestHarness.expect(waited, "concurrent poll and input complete without deadlock")
+            TestHarness.expect(session.followedPaneID == "w1:p1",
+                "concurrent input leaves the followed pane intact")
+            TestHarness.expect(fake.calls.filter { $0 == .paneSendInput }.count == 160,
+                "every keystroke reached the transport — got \(fake.calls.filter { $0 == .paneSendInput }.count), expected 160")
+        }
+
         TestHarness.group("HerdrSession — disconnect handling") {
             let fake = FakeTransport()
             let session = HerdrSession(transport: fake)
@@ -292,9 +365,19 @@ enum HerdrTests {
 /// Only "there is nothing to call" and "it changed under me" behaviour is worth
 /// faking; the socket itself is covered by `--herdr-test` against the real
 /// server.
+///
+/// Deliberately not thread-safe: `HerdrSession` funnels every call through its
+/// own serial queue, so the fake is only ever touched from one thread at a time.
+/// That is itself a nice property to rely on in tests.
 private final class FakeTransport: HerdrTransport {
     var responses: [HerdrProtocol.Method: Any] = [:]
     var errorToThrow: Error?
+
+    /// Successive replies for `paneRead`, consumed one per call and held at the
+    /// last entry. Lets a test model a screen that changes over time.
+    var readResponses: [String] = []
+    private var readIndex = 0
+
     private(set) var calls: [HerdrProtocol.Method] = []
     private(set) var callsWithParams: [(method: HerdrProtocol.Method, params: [String: Any])] = []
 
@@ -302,6 +385,11 @@ private final class FakeTransport: HerdrTransport {
         calls.append(method)
         callsWithParams.append((method, params))
         if let errorToThrow { throw errorToThrow }
+        if method == .paneRead, !readResponses.isEmpty {
+            let text = readResponses[min(readIndex, readResponses.count - 1)]
+            readIndex += 1
+            return ["read": ["pane_id": params["pane_id"] ?? "", "text": text]]
+        }
         guard let response = responses[method] else {
             throw HerdrError.malformed("FakeTransport has no response for \(method.rawValue)")
         }
