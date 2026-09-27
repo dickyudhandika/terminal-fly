@@ -136,7 +136,7 @@ not a failure.
 Current state:
 
 ```
---test        PASS: 151 checks, 0 failures
+--test        PASS: 157 checks, 0 failures
 --uitest      PASS: 35 checks, 0 failures
 --selftest    PASS
 --herdr-test  PASS (3 sequential requests, each on its own connection)
