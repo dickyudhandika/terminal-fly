@@ -125,6 +125,7 @@ binary behind flags:
 ./build/TerminalFly.app/Contents/MacOS/TerminalFly --selftest    # spawns a real PTY
 ./build/TerminalFly.app/Contents/MacOS/TerminalFly --herdr-test  # live herdr socket
 ./build/TerminalFly.app/Contents/MacOS/TerminalFly --herdr-uitest # herdr render path, real window
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --logintest    # login item (needs /Applications)
 ```
 
 `--test` and `--selftest` run headlessly, so they work over SSH and in CI.
@@ -237,10 +238,16 @@ PATH. Standard terminal-app gotcha, fixed at the source.
 - **Notarization/DMG signing needs an Apple Developer ID** — the tooling is in
   place (`--notarize`) but no certificate is available yet. The DMG is ad-hoc
   signed for now, so other machines will need a Gatekeeper override.
-- **Launch at login is untested.** `SMAppService` requires the app in
-  `/Applications` with a stable signature; running from `build/` will fail.
 - **Multi-display re-parking** is verified by unit test (a saved frame on a
   vanished screen is rejected) but not on real hardware — single-display machine.
+- **Launch at login** is implemented and verified with `--logintest`, which
+  registers a login item, checks the status, and unregisters it again. It only
+  works when the app is in a stable location (`/Applications`), because that is a
+  `SMAppService` requirement — running from `build/` reports a skip, not a failure.
+- **Sparkle auto-update is not implemented** (deliberate). It is a P2 nice-to-have
+  and requires a notarized app plus an EdDSA-signed appcast on a hosted feed;
+  against the current ad-hoc-signed DMG it would be theatre. It lands with the
+  Developer ID work.
 - **herdr integration** (Step 8) polls `pane.read` rather than subscribing to
   events: herdr 0.8.2 exposes no output-streaming event, so pane changes are
   detected by comparing successive screen snapshots (repaint only on change).

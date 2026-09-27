@@ -48,6 +48,12 @@ enum TerminalFlyMain {
             exit(HerdrUITests.run())
         }
 
+        // Launch-at-login check: `TerminalFly --logintest`. Needs the app in
+        // /Applications; self-reversing, so it never leaves a stray login item.
+        if CommandLine.arguments.contains("--logintest") {
+            exit(LoginItemSelfTest.run())
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

@@ -242,9 +242,11 @@ Settings window:
 - Validation: Click menu bar icon → dropdown shows. Toggle from menu works. Opacity slider in menu works.
 
 ### Step 7: Polish + distribution prep
-- What: App icon, launch at login (SMAppService), Sparkle auto-update, notarization, DMG build, GitHub repo setup (MIT)
+- What: App icon, launch at login (SMAppService), notarization, DMG build, GitHub repo setup (MIT)
 - Files: `Resources/Assets.xcassets`, build scripts, `LICENSE`
 - Validation: `codesign --verify` passes. `xcrun notarytool submit` accepted. DMG opens on clean machine. GitHub repo public with MIT license.
+- Result: icon + DMG + repo done. **Launch at login is implemented AND verified** via `--logintest` (registers, checks `.enabled`, unregisters; self-reversing) — run from `/Applications` to exercise it, since `SMAppService` requires a stable location. Notarization remains blocked on an Apple Developer ID cert.
+- **Sparkle auto-update is deferred, not done.** It is P2 ("nice to have") and it cannot be wired up honestly before notarization: Sparkle verifies the signature of the downloaded update and needs an EdDSA-signed appcast with a hosted feed, which is meaningless against an ad-hoc-signed DMG. Implement it once a Developer ID and a release pipeline exist. Tracked in README → Known gaps.
 
 ### Step 8: herdr integration
 - What: Terminal Fly can connect to herdr instead of spawning own PTY. herdr owns session management (multiplexing, splits, persistence). Terminal Fly becomes floating display + keyboard input for herdr sessions.

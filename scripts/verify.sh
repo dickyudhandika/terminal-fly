@@ -73,6 +73,21 @@ else
   echo "herdr render path OK"
 fi
 
+step "launch at login (--logintest)"
+# Exit 0 = verified, 2 = skipped because the app is not in /Applications (the
+# normal case when running from build/), 1 = real failure. Self-reversing: it
+# unregisters the login item before exiting.
+"$BIN" --logintest
+login_status=$?
+if [ "$login_status" -eq 1 ]; then
+  echo "FAIL: launch-at-login check failed"
+  FAILED=1
+elif [ "$login_status" -eq 2 ]; then
+  echo "launch at login SKIPPED (app not in /Applications — run from /Applications to verify)"
+else
+  echo "launch at login OK"
+fi
+
 step "result"
 if [ "$FAILED" -ne 0 ]; then
   echo "FAIL: one or more checks failed"
