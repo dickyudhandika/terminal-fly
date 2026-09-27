@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Pre-flight scan before publishing the repo publicly.
+#
+# Deliberately no `set -e`: grep exits 1 when it finds nothing, which is the
+# success case here. The scan reporting "clean" must not abort the script.
 set -uo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 SELF="$(basename "${BASH_SOURCE[0]}")"
 
 echo "=== 1. secret patterns ==="

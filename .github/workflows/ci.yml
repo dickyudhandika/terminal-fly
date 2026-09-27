@@ -1,0 +1,92 @@
+name: CI
+
+# Terminal Fly builds with Command Line Tools only (no Xcode.app) — see
+# scripts/build.sh. GitHub's macos runners ship Xcode AND CommandLineTools;
+# `xcode-select -p` defaults to Xcode. The `clt-only` job below explicitly
+# switches to CommandLineTools so CI exercises the exact environment the README
+# promises, not a luckier one. `build` (default toolchain) is kept as the
+# common case so a CLT-only regression is distinguishable from a general break.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcode-select -p
+
+      - name: Build (release)
+        run: ./scripts/build.sh release
+
+      - name: Assert the binary exists
+        run: |
+          test -x build/TerminalFly.app/Contents/MacOS/TerminalFly \
+            || { echo "FATAL: no binary produced"; exit 1; }
+          ls -la build/TerminalFly.app/Contents/Resources/
+
+      - name: Logic tests (headless)
+        run: ./build/TerminalFly.app/Contents/MacOS/TerminalFly --test
+
+  clt-only:
+    # The environment the README advertises: no Xcode.app selected at all.
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Switch to Command Line Tools only
+        run: |
+          sudo xcode-select -s /Library/Developer/CommandLineTools
+          xcode-select -p
+          # Prove Xcode is genuinely not selected, so this job means something.
+          if xcode-select -p | grep -q "Xcode.app"; then
+            echo "FATAL: xcode-select still points at Xcode; job is not testing CLT-only"
+            exit 1
+          fi
+
+      - name: Build with CLT only
+        run: ./scripts/build.sh release
+
+      - name: Logic tests (headless)
+        run: ./build/TerminalFly.app/Contents/MacOS/TerminalFly --test
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh
+
+  icon:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icon regenerates deterministically
+        run: |
+          python3 -m pip install --quiet pillow
+          cp Resources/AppIcon.icns /tmp/before.icns
+          python3 scripts/make-icon.py
+          # Icon bytes need not be identical (Pillow/zlib versions vary), but the
+          # output must be a valid .icns of the expected size class.
+          file Resources/AppIcon.icns | grep -q "Mac OS X icon" \
+            || { echo "FATAL: make-icon.py did not produce a valid .icns"; exit 1; }
+          ls Resources/Assets.xcassets/AppIcon.appiconset/*.png | wc -l | grep -qx 10 \
+            || { echo "FATAL: expected 10 icon variants"; exit 1; }
+          echo "icon pipeline OK"
