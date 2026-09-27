@@ -15,11 +15,19 @@ enum TerminalFlyMain {
             exit(SelfTest.run())
         }
 
+        // Live herdr integration check: `TerminalFly --herdr-test`. Needs a
+        // running herdr; exits 2 (not 1) when herdr is simply absent, because
+        // that is a supported state, not a failure.
+        if CommandLine.arguments.contains("--herdr-test") {
+            exit(HerdrSelfTest.run())
+        }
+
         // Pure-logic tests: `TerminalFly --test`. No window server needed.
         if CommandLine.arguments.contains("--test") {
             GeometryTests.run()
             HotkeyTests.run()
             ShellTests.run()
+            HerdrTests.run()
             exit(TestHarness.finish())
         }
 
@@ -28,6 +36,16 @@ enum TerminalFlyMain {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             exit(UITests.run())
+        }
+
+        // End-to-end herdr render check: `TerminalFly --herdr-uitest`.
+        // Enters herdr mode in a real window, follows a pane, renders it, and
+        // asserts the panel actually shows pane text. This is the Step 8
+        // acceptance path — `--herdr-test` only proves the socket works.
+        if CommandLine.arguments.contains("--herdr-uitest") {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            exit(HerdrUITests.run())
         }
 
         let app = NSApplication.shared

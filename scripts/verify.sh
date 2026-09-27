@@ -43,6 +43,36 @@ step "logic tests (--test, headless)"
 step "PTY selftest (--selftest)"
 "$BIN" --selftest || FAILED=1
 
+step "herdr fallback (--herdr-test against a dead socket)"
+# Exit 0 = live herdr, 2 = unavailable (expected on most machines), 1 = real
+# failure. Only 1 is a problem, so this asserts the exit code explicitly rather
+# than letting a non-zero status fail the run.
+HERDR_SOCKET=/tmp/terminalfly-no-such.sock "$BIN" --herdr-test
+herdr_status=$?
+if [ "$herdr_status" -eq 1 ]; then
+  echo "FAIL: herdr fallback path reported a real error"
+  FAILED=1
+elif [ "$herdr_status" -eq 2 ]; then
+  echo "herdr fallback OK (herdr not running — expected)"
+else
+  echo "herdr fallback OK (a live herdr answered)"
+fi
+
+step "herdr render path (--herdr-uitest, needs a live herdr)"
+# Exercises the full loop in a real window: follow a scratch pane, render it,
+# type into it, and fall back on disconnect. Skipped (exit 2) without herdr,
+# which is a supported state rather than a failure.
+"$BIN" --herdr-uitest
+herdr_ui_status=$?
+if [ "$herdr_ui_status" -eq 1 ]; then
+  echo "FAIL: herdr render path failed"
+  FAILED=1
+elif [ "$herdr_ui_status" -eq 2 ]; then
+  echo "herdr render path SKIPPED (no herdr / no window server)"
+else
+  echo "herdr render path OK"
+fi
+
 step "result"
 if [ "$FAILED" -ne 0 ]; then
   echo "FAIL: one or more checks failed"

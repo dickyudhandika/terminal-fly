@@ -16,6 +16,19 @@ final class AppCoordinator: NSObject {
     private var settingsWindow: NSWindow?
     private var focusObservers: [NSObjectProtocol] = []
 
+    /// herdr integration (Step 8). `nil` until the user opts into herdr mode, so
+    /// a machine without herdr pays nothing for it.
+    private var herdrClient: HerdrClient?
+    private var herdrSession: HerdrSession?
+    private var herdrPollTimer: Timer?
+
+    /// True while the panel is showing a herdr pane instead of its own shell.
+    private(set) var isHerdrMode = false
+
+    /// Test seam for `--herdr-uitest`: lets the test drive the disconnect path
+    /// without killing the user's real herdr.
+    var herdrSessionForTesting: HerdrSession? { herdrSession }
+
     override init() {
         controller = PanelController()
         hotkeys = HotkeyManager()
@@ -30,6 +43,143 @@ final class AppCoordinator: NSObject {
 
     func start() {
         controller.show()
+    }
+
+    // MARK: - herdr mode (Step 8)
+
+    /// True when a herdr socket is present, so the UI can offer the option.
+    var herdrAvailable: Bool {
+        FileManager.default.fileExists(atPath: HerdrProtocol.defaultSocketPath)
+    }
+
+    /// Enters herdr mode, following `paneID` (or herdr's focused pane).
+    ///
+    /// Returns an error string when herdr cannot be reached, so the caller can
+    /// show a message. On success the panel switches to the herdr display and a
+    /// poll timer starts.
+    @discardableResult
+    func enterHerdrMode(paneID: String? = nil) -> String? {
+        let client: HerdrClient
+        if let existing = herdrClient {
+            client = existing
+        } else {
+            client = HerdrClient()
+            herdrClient = client
+        }
+
+        let session: HerdrSession
+        if let existing = herdrSession {
+            session = existing
+        } else {
+            session = HerdrSession(transport: client)
+            herdrSession = session
+            wireHerdrCallbacks(session)
+        }
+
+        do {
+            let panes = try session.refreshPanes()
+            guard let target = paneID ?? session.focusedPane?.paneID else {
+                return "herdr is running but has no panes to show"
+            }
+            guard panes.contains(where: { $0.paneID == target }) || paneID != nil else {
+                return "pane \(target) is no longer present"
+            }
+            session.follow(paneID: target)
+        } catch {
+            // Distinguish "no herdr" from "herdr answered with an error": the
+            // first is a normal fallback, the second is worth telling the user.
+            session.handleFailure(error)
+            return (error as? HerdrError)?.description ?? "\(error)"
+        }
+
+        let display = controller.showHerdr()
+        display.invalidateScreenCache()
+        display.onInput = { [weak self] bytes in
+            self?.forwardHerdrInput(bytes)
+        }
+        isHerdrMode = true
+        startHerdrPolling()
+        // Paint immediately rather than waiting a full tick.
+        pollHerdrOnce()
+        refreshMenuBar()
+        return nil
+    }
+
+    /// Leaves herdr mode and returns the panel to its own shell.
+    func exitHerdrMode() {
+        stopHerdrPolling()
+        herdrSession?.unfollow()
+        isHerdrMode = false
+        controller.showStandalone()
+        refreshMenuBar()
+    }
+
+    private func wireHerdrCallbacks(_ session: HerdrSession) {
+        session.onScreenChange = { [weak self] screen in
+            self?.controller.herdrSurface?.show(screen: screen)
+        }
+        session.onStateChange = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .connected:
+                break // the screen callback does the visible work
+            case let .disconnected(reason):
+                // herdr vanished: show why, then hand the panel back to a working
+                // shell so the user is never left with a dead pane.
+                self.controller.herdrSurface?.showStatus("herdr disconnected: \(reason)\n\nFalling back to a local shell.")
+                self.stopHerdrPolling()
+                self.isHerdrMode = false
+                self.controller.showStandalone()
+                self.refreshMenuBar()
+            }
+        }
+    }
+
+    private func startHerdrPolling() {
+        stopHerdrPolling()
+        let interval = herdrSession?.minimumPollInterval ?? 0.4
+        herdrPollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollHerdrOnce() }
+        }
+    }
+
+    private func stopHerdrPolling() {
+        herdrPollTimer?.invalidate()
+        herdrPollTimer = nil
+    }
+
+    /// One poll tick. A socket read is blocking, so this runs off the main thread
+    /// and hops back to apply the result — a local socket is fast, but blocking
+    /// the main thread on every tick would stutter the panel.
+    private func pollHerdrOnce() {
+        guard let session = herdrSession, isHerdrMode else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let changed: String?
+            do {
+                changed = try session.pollOnce()
+            } catch {
+                DispatchQueue.main.async { self?.herdrSession?.handleFailure(error) }
+                return
+            }
+            guard let changed else { return } // nothing changed; nothing to paint
+            DispatchQueue.main.async {
+                self?.controller.herdrSurface?.show(screen: changed)
+            }
+        }
+    }
+
+    /// Forwards raw keystroke bytes to herdr.
+    ///
+    /// Bytes arrive from SwiftTerm's `send` hook already encoded for the
+    /// terminal, so they are passed through as text rather than reinterpreted.
+    private func forwardHerdrInput(_ bytes: ArraySlice<UInt8>) {
+        guard let session = herdrSession else { return }
+        let text = String(decoding: bytes, as: UTF8.self)
+        do {
+            try session.sendText(text)
+        } catch {
+            session.handleFailure(error)
+        }
     }
 
     // MARK: - Preferences → panel
@@ -151,8 +301,37 @@ final class AppCoordinator: NSObject {
             controller: controller,
             onOpenSettings: { [weak self] in self?.openSettings() },
             onRestartShell: { [weak self] in self?.restartShell() },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            herdrPanes: herdrPanesForMenu(),
+            isHerdrMode: isHerdrMode,
+            // Only offered when herdr is actually installed — a nil handler hides
+            // the whole section rather than showing a dead menu.
+            onEnterHerdr: herdrAvailable ? { [weak self] paneID in
+                guard let self else { return }
+                if let error = self.enterHerdrMode(paneID: paneID) {
+                    self.controller.herdrSurface?.showStatus("herdr: \(error)")
+                }
+            } : nil,
+            onExitHerdr: { [weak self] in self?.exitHerdrMode() }
         )
+    }
+
+    /// Panes for the menu. Read synchronously: this is a local socket round-trip
+    /// on a user-initiated menu open, and the menu is rebuilt right after, so an
+    /// async refresh would render a stale list.
+    private func herdrPanesForMenu() -> [HerdrProtocol.Pane] {
+        guard herdrAvailable else { return [] }
+        // Reuse the live session when there is one; otherwise open a throwaway
+        // client just to enumerate panes.
+        if let session = herdrSession, (try? session.refreshPanes()) != nil {
+            return session.panes
+        }
+        do {
+            let value = try HerdrClient().call(.paneList, params: [:])
+            return try HerdrProtocol.decodePaneList(value)
+        } catch {
+            return []
+        }
     }
 
     private func refreshMenuBar() {

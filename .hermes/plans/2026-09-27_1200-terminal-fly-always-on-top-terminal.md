@@ -1,7 +1,7 @@
 # Terminal Fly — Always-On-Top Terminal for macOS
 
 ## Status
-IMPLEMENTED (Steps 1–7 complete, Step 8 not started)
+IMPLEMENTED (Steps 1–8 complete)
 
 ## Goal
 A lightweight macOS terminal app that stays visible above other apps while you work. Like the kitty + Hammerspoon overlay setup, but as a standalone product — no Hammerspoon, no kitty dependency, works for anyone.
@@ -246,11 +246,18 @@ Settings window:
 - Files: `Resources/Assets.xcassets`, build scripts, `LICENSE`
 - Validation: `codesign --verify` passes. `xcrun notarytool submit` accepted. DMG opens on clean machine. GitHub repo public with MIT license.
 
-### Step 8: herdr integration (post-MVP)
+### Step 8: herdr integration
 - What: Terminal Fly can connect to herdr instead of spawning own PTY. herdr owns session management (multiplexing, splits, persistence). Terminal Fly becomes floating display + keyboard input for herdr sessions.
 - Architecture: herdr spawns PTY → pipes output to Terminal Fly via Unix socket (or similar IPC). Terminal Fly sends keystrokes back to herdr. Standalone mode (own PTY) remains default — herdr mode is opt-in.
-- Files: `Terminal/HerdrBridge.swift`, `Terminal/SessionDiscovery.swift`
-- Validation: Start herdr session → Terminal Fly detects it → output renders in floating panel. Type in panel → input reaches herdr session. Kill herdr → Terminal Fly falls back to standalone mode or shows disconnect state.
+- Files: `Herdr/HerdrProtocol.swift`, `Herdr/HerdrClient.swift`, `Herdr/HerdrSession.swift`, `Herdr/HerdrDisplaySurface.swift`, `Herdr/HerdrSelfTest.swift`, `Herdr/HerdrUITests.swift`
+- **IPC contract, measured against herdr 0.8.2** (`herdr api schema --json`, protocol 20, 91 methods):
+  - Socket: `~/.config/herdr/herdr.sock`, newline-delimited JSON. `id` and the trailing newline are both mandatory.
+  - **One request per connection.** The server replies once and closes; a second request on the same socket gets a broken pipe. `events.subscribe` is the exception — it holds the connection open for events but serves no requests.
+  - **No output-streaming API.** The 27 subscribable events are metadata only; `pane.updated` fires for title/cwd/focus/status changes, *not* for plain output (verified: zero events after writing to an idle focused pane). So the bridge **polls** `pane.read(source:"visible", format:"ansi")` and repaints only when the text changes.
+  - Input: `pane.send_input` (raw bytes; what typing uses) and `pane.send_keys` (named keys like `Enter`, `C-c`).
+  - `source:"recent"` returns empty on a pane that has not scrolled — use `source:"visible"`.
+- Validation: all three criteria verified end to end by `--herdr-uitest` in a real window against live herdr, using an isolated scratch workspace (never the user's panes): pane output renders in the floating panel; typing in the panel reaches the pane; disconnect falls back to the standalone shell.
+- Result: `--herdr-test` (socket layer, 3 sequential requests), `--herdr-uitest` (render + input + fallback, 8 checks), 31 unit checks over the session logic via a fake transport. Both wired into `scripts/verify.sh`.
 
 ## Tests / Validation
 
@@ -281,7 +288,33 @@ Settings window:
 
 7. ~~Name: "Terminal Fly"~~ — RESOLVED. Keeping "Terminal Fly". Trademark search pending but not blocking development.
 
-8. **herdr IPC protocol** — Step 8 needs herdr's IPC contract defined. How does herdr expose sessions? Unix socket? What's the message format? Need to inspect herdr docs/source before Step 8. Not blocking Steps 1-7.
+8. ~~**herdr IPC protocol**~~ — **RESOLVED 2026-09-27.** Contract inspected directly against the
+   running herdr 0.8.2 (`herdr api schema --json`, protocol 20, 91 methods) and verified over the
+   socket. Details:
+   - **Transport**: Unix stream socket at `~/.config/herdr/herdr.sock` (server) and
+     `herdr-client.sock` (client). Not HTTP.
+   - **Framing**: newline-delimited JSON, one request per line. `id` is REQUIRED — omitting it
+     returns `invalid_request: missing field 'id'`. A request without a trailing newline hangs
+     (the server waits for the line terminator).
+   - **Request**: `{"id": "<correlation>", "method": "<name>", "params": {...}}\n`
+   - **Response**: `{"id": "...", "result": {...}}\n` or `{"id": "...", "error": {"code": "...",
+     "message": "..."}}\n`
+   - **Methods needed**:
+     | Need | Method | Params |
+     |------|--------|--------|
+     | discover panes | `pane.list` | `{workspace_id?: string\|null}` |
+     | render output | `pane.read` | `{pane_id, source: visible\|recent\|recent_unwrapped\|detection, lines?, strip_ansi?, format?}` |
+     | send keystrokes | `pane.send_text` | `{pane_id, text}` (literal) |
+     | send special keys | `pane.send_keys` | `{pane_id, keys: [...]}` — `esc`/`escape` for Escape |
+     | run a command | `pane.run` | text + Enter in one call |
+     | wait for output | `pane.wait_for_output` | `{pane_id, match: {type: substring\|regex, value}, timeout_ms?}` |
+     | live streaming | `events.subscribe` | `{subscriptions: [{type: "pane.updated"}, ...]}` → replies `{"result":{"type":"subscription_started"}}`, then events stream on the same connection |
+   - **Live evidence**: `pane.list` returned 3 panes with `pane_id`, `agent`, `agent_status`,
+     `cwd`, `focused`, `terminal_title`; `pane.read` returned pane text; unknown methods return a
+     JSON error listing valid variants.
+   - **Design consequence**: standalone mode stays the default. herdr mode is opt-in and must
+     degrade gracefully — if the socket is absent, refuse the connection, or the server exits,
+     fall back to the standalone PTY rather than showing a dead panel.
 
 ## Competitive landscape
 
@@ -309,4 +342,4 @@ Settings window:
   - DMG mounts, app inside is valid-on-disk + satisfies its Designated Requirement, and its embedded `--test` passes.
   - **Build deviation from plan:** plan assumed XcodeGen + `xcodebuild`, but this machine has Command Line Tools only — `xcodebuild` is unavailable and SwiftPM is broken (its bundled `libPackageDescription.dylib` is missing symbols, so every `Package.swift` fails to link). `scripts/build.sh` compiles with `swiftc` directly, runs SwiftTerm's SPM plugin binary by hand, and assembles the bundle. Same sources.
   - **Blocker found during Step 3:** the old `~/.hammerspoon/figma_pin.lua` prototype (from the kitty setup) binds the same four hotkeys and silently wins, because Hammerspoon starts first at login. Carbon reports success regardless. **`figma_pin.lua` must be disabled** or Terminal Fly's hotkeys will never fire on this machine.
-  - **Still open:** notarization needs an Apple Developer ID cert (tooling ready: `scripts/make-dmg.sh --notarize`); launch-at-login (`SMAppService`) untested, needs the app in `/Applications`; multi-display re-parking verified by unit test only (single-display machine); Step 8 herdr blocked on herdr's IPC contract.
+  - **Still open:** notarization needs an Apple Developer ID cert (tooling ready: `scripts/make-dmg.sh --notarize`); launch-at-login (`SMAppService`) untested, needs the app in `/Applications`; multi-display re-parking verified by unit test only (single-display machine). Step 8 (herdr) COMPLETE — IPC contract measured against herdr 0.8.2 and verified end to end.

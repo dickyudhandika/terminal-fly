@@ -9,6 +9,12 @@ struct MenuBarMenu: View {
     var onRestartShell: () -> Void
     var onQuit: () -> Void
 
+    /// herdr section. Optional so the menu still renders on a machine without it.
+    var herdrPanes: [HerdrProtocol.Pane] = []
+    var isHerdrMode: Bool = false
+    var onEnterHerdr: ((String?) -> Void)?
+    var onExitHerdr: (() -> Void)?
+
     @State private var revision = 0
 
     var body: some View {
@@ -61,9 +67,29 @@ struct MenuBarMenu: View {
 
         Divider()
 
+        if let onEnterHerdr {
+            if isHerdrMode {
+                Button("Leave herdr mode") { onExitHerdr?() }
+            } else if herdrPanes.isEmpty {
+                Text("herdr: no panes")
+            } else {
+                Menu("Follow herdr pane") {
+                    ForEach(herdrPanes) { pane in
+                        Button(pane.displayName) { onEnterHerdr(pane.paneID) }
+                    }
+                }
+            }
+            Divider()
+        }
+
         Button("Settings…") { onOpenSettings() }
         Button("Quit Terminal Fly") { onQuit() }
     }
+}
+
+/// SwiftUI needs a stable id for `ForEach`; the pane id is exactly that.
+extension HerdrProtocol.Pane: Identifiable {
+    public var id: String { paneID }
 }
 
 /// Owns the `NSStatusItem` and its SwiftUI menu.

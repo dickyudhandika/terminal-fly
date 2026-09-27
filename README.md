@@ -23,7 +23,7 @@ Early but working. Steps 1–6 of the plan are complete and verified; see
 | 5 | Settings UI (appearance, hotkeys, shell) | ✅ |
 | 6 | Menu bar item + quick actions | ✅ |
 | 7 | Icon, DMG | ✅ (notarization pending a Developer ID) |
-| 8 | herdr integration | ⬜ not started |
+| 8 | herdr integration | ✅ |
 
 ## Install
 
@@ -58,6 +58,27 @@ model: no modes, no "enter floating mode" step.
 combo. Carbon's `RegisterEventHotKey` reports success even when it loses.
 Hammerspoon is the usual culprit — check `~/.hammerspoon/` for stale scripts that
 bind the same keys. See [Hotkeys don't fire](#hotkeys-dont-fire).
+
+### herdr mode
+
+If [herdr](https://herdr.dev) is running, the menu bar grows a **Follow herdr
+pane** submenu listing its panes (agent, status, and title included). Pick one and
+the panel shows that pane instead of a local shell — read it, type into it, and
+leave with **Leave herdr mode**. Standalone mode is the default and the fallback:
+if herdr isn't running, or dies mid-session, the panel drops back to its own
+shell rather than freezing.
+
+Notes from building against herdr 0.8.2:
+
+- The socket is `~/.config/herdr/herdr.sock`, newline-delimited JSON. Override the
+  path with `HERDR_SOCKET` (useful for a non-standard config dir).
+- herdr closes the connection after **every** response — one request per
+  connection. Only `events.subscribe` stays open, and it serves no requests.
+- There is no output-streaming event, so the panel **polls** `pane.read` at 0.4 s
+  and repaints only when the visible text changes. Subscribable events are
+  metadata only (`pane.updated` covers title/cwd/focus/status, not output).
+- Input goes through `pane.send_input` (raw bytes) and `pane.send_keys`
+  (named keys like `Enter`).
 
 ## Building
 
@@ -99,21 +120,30 @@ There is no XCTest harness, because there's no Xcode. Tests are built into the
 binary behind flags:
 
 ```bash
-./build/TerminalFly.app/Contents/MacOS/TerminalFly --test      # pure logic, no window server
-./build/TerminalFly.app/Contents/MacOS/TerminalFly --uitest    # real window server
-./build/TerminalFly.app/Contents/MacOS/TerminalFly --selftest  # spawns a real PTY
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --test        # pure logic, no window server
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --uitest      # real window server
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --selftest    # spawns a real PTY
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --herdr-test  # live herdr socket
+./build/TerminalFly.app/Contents/MacOS/TerminalFly --herdr-uitest # herdr render path, real window
 ```
 
 `--test` and `--selftest` run headlessly, so they work over SSH and in CI.
-`--uitest` needs a logged-in GUI session.
+`--uitest` needs a logged-in GUI session. The two herdr flags need herdr running
+and exit **2** (skip) rather than 1 when it isn't — absence is a supported state,
+not a failure.
 
 Current state:
 
 ```
---test     PASS: 80 checks, 0 failures
---uitest   PASS: 35 checks, 0 failures
---selftest PASS
+--test        PASS: 151 checks, 0 failures
+--uitest      PASS: 35 checks, 0 failures
+--selftest    PASS
+--herdr-test  PASS (3 sequential requests, each on its own connection)
+--herdr-uitest PASS (render + input + fallback, in a real window)
 ```
+
+`--herdr-uitest` creates its own scratch herdr workspace, so it never touches the
+panes you're working in.
 
 CI runs on every push: `build` and `clt-only` both build in release and run
 `--test`, where `clt-only` switches `xcode-select` to CommandLineTools first and
@@ -211,7 +241,9 @@ PATH. Standard terminal-app gotcha, fixed at the source.
   `/Applications` with a stable signature; running from `build/` will fail.
 - **Multi-display re-parking** is verified by unit test (a saved frame on a
   vanished screen is rejected) but not on real hardware — single-display machine.
-- **herdr integration** (Step 8) is not started; it needs herdr's IPC contract.
+- **herdr integration** (Step 8) polls `pane.read` rather than subscribing to
+  events: herdr 0.8.2 exposes no output-streaming event, so pane changes are
+  detected by comparing successive screen snapshots (repaint only on change).
 
 ## License
 

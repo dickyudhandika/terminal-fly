@@ -20,6 +20,13 @@ final class PanelController {
     let surface: TerminalSurface
     let positions: PositionManager
 
+    /// herdr display surface, created lazily — a user with no herdr should never
+    /// pay for it, and its existence is the signal that herdr mode is active.
+    private(set) var herdrSurface: HerdrDisplaySurface?
+
+    /// Which view currently fills the panel.
+    private var contentView = NSView()
+
     init(configuration: ShellConfiguration = .default()) {
         let defaultFrame = NSRect(x: 0, y: 0, width: 620, height: 320)
 
@@ -66,18 +73,53 @@ final class PanelController {
 
         // Content: the SwiftTerm surface, pinning its own edges.
         surface = TerminalSurface(frame: defaultFrame, configuration: configuration)
-        surface.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(surface)
-        NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: content.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
-        panel.contentView = content
+        showStandalone()
 
         positions.restore()
+    }
+
+    // MARK: - Mode switching
+
+    /// Standalone mode: the local PTY surface fills the panel.
+    func showStandalone() {
+        install(surface)
+    }
+
+    /// herdr mode: replace the PTY surface with the herdr display.
+    ///
+    /// The PTY surface is *kept*, not destroyed: if herdr dies mid-session the app
+    /// falls back to a working shell rather than an empty panel.
+    @discardableResult
+    func showHerdr() -> HerdrDisplaySurface {
+        let display: HerdrDisplaySurface
+        if let existing = herdrSurface {
+            display = existing
+        } else {
+            display = HerdrDisplaySurface(frame: panel.contentView?.bounds ?? .zero)
+            herdrSurface = display
+        }
+        install(display)
+        return display
+    }
+
+    var isHerdrMode: Bool {
+        guard let herdrSurface else { return false }
+        return herdrSurface.superview != nil
+    }
+
+    private func install(_ view: NSView) {
+        if !contentView.subviews.isEmpty {
+            for subview in contentView.subviews { subview.removeFromSuperview() }
+        }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            view.topAnchor.constraint(equalTo: contentView.topAnchor),
+            view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+        panel.contentView = contentView
     }
 
     var isVisible: Bool { panel.isVisible }
