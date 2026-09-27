@@ -1,0 +1,3 @@
+[submodule "vendor/SwiftTerm"]
+	path = vendor/SwiftTerm
+	url = https://github.com/migueldeicaza/SwiftTerm.git

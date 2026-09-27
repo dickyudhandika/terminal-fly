@@ -1,0 +1,15 @@
+# Build output
+build/
+
+# SwiftPM / Xcode leftovers (the project does not use either — see README)
+.build/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
