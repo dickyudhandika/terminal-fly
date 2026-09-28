@@ -31,6 +31,44 @@ final class TerminalSurface: LocalProcessTerminalView {
         fatalError("init(coder:) is not used — the panel builds its view in code")
     }
 
+    // MARK: - Window-drag vs. terminal-click arbitration
+
+    /// AppKit asks this during the left-mouse-down hit-test to decide whether
+    /// the click starts a window drag (`panel.isMovableByWindowBackground =
+    /// true`). The default `NSView` answer is `true`, which hands the press to
+    /// the panel's drag machinery — SwiftTerm's `mouseDown`/`mouseDragged`/
+    /// `mouseUp` never run, so click-drag selection is dead.
+    ///
+    /// Returning `false` gives the click to this view instead. It only affects
+    /// clicks that land inside the surface's frame; the title bar sits outside
+    /// it (the surface is pinned to `contentView.safeAreaLayoutGuide`, one
+    /// title bar below the top), so dragging by the title bar still moves the
+    /// panel. Note the surface fills the panel edge to edge below that bar, so
+    /// this does make the terminal body select-only, not drag-by-background.
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    // MARK: - Select-to-copy
+
+    /// Copy a finished drag-selection to the general pasteboard — the
+    /// "highlight text, get it copied" behaviour.
+    ///
+    /// `super` runs first: it finalises the drag selection and handles link
+    /// clicks, mouse reporting, and semantic-prompt routing. `copy(_:)` then
+    /// uses SwiftTerm's own path (`selection.getSelectedText()` →
+    /// `NSPasteboard.general`), the same one the Edit menu and OSC 52 use.
+    ///
+    /// The guard matters: a bare click clears `selection.active` in
+    /// `mouseDown`, so a click that merely dismisses a selection copies
+    /// nothing, while a drag (or double/triple click) leaves it set.
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        if selection.active, selection.hasSelectionRange {
+            copy(self)
+        }
+    }
+
     // MARK: - Appearance
 
     func applyFont(_ font: NSFont) {

@@ -369,6 +369,116 @@ enum UITests {
                 panel.orderOut(nil)
             }
 
+            TestHarness.group("Panel — drag selection reaches the clipboard") {
+                let controller = PanelController()
+                let panel = controller.panel
+                panel.orderFrontRegardless()
+                // The shell needs a moment before it paints its prompt.
+                RunLoop.current.run(until: Date().addingTimeInterval(2.0))
+
+                let surface = controller.surface
+                let terminal = surface.getTerminal()
+                // Deterministic drag path: with mouse reporting on, a drag is
+                // forwarded to the shell as a mouse event instead of selecting.
+                surface.allowMouseReporting = false
+                // Clear what the live prompt painted, then seed the marker the
+                // drag is supposed to pick up.
+                let marker = "TERMINALFLY_DRAG_MARKER"
+                surface.feed(text: "\u{1b}[2J\u{1b}[H")
+                surface.feed(text: "\(marker)\r\n")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+
+                // Locate the marker in viewport coordinates (`getLine` is
+                // scroll-invariant) and where it ends.
+                var markerRow: Int?
+                var markerEndCol = 0
+                for row in 0..<terminal.rows {
+                    guard let line = terminal.getLine(row: row) else { continue }
+                    let text = line.translateToString(trimRight: true)
+                    if let range = text.range(of: marker) {
+                        markerRow = row
+                        markerEndCol = text.distance(from: text.startIndex, to: range.upperBound)
+                        break
+                    }
+                }
+                // A missing marker would make every later assertion vacuous.
+                guard let row = markerRow else {
+                    TestHarness.expect(false, "seeded marker \(marker) is on screen")
+                    panel.orderOut(nil)
+                    return
+                }
+
+                // The arbitration fix is a property, not an event trace, and the
+                // property has to be read through KVC: `mouseDownCanMoveWindow` is
+                // declared `open` in SwiftTerm's `TerminalView`, i.e. outside this
+                // module, and the app's `TerminalSurface` is internal, so a direct
+                // member access here compiles only under `@testable`. KVC is the
+                // one path available to a compiled-in test target.
+                //
+                // This is also the only observable that can carry the fix: a
+                // synthetic `mouseDown` calls this view directly and never goes
+                // through AppKit's window-drag arbitration, so no synthetic
+                // sequence can reproduce the original dead-selection bug — the
+                // drag below only proves the event path and the copy hook.
+                TestHarness.expect(surface.value(forKey: "mouseDownCanMoveWindow") as? Bool == false,
+                                   "the surface takes the click instead of dragging the window")
+
+                // Derive cell geometry the way `processSizeChange` does: the
+                // width is the view's own width over its column count, and the
+                // height has no scroller term.
+                let cellWidth = surface.bounds.width / CGFloat(max(1, terminal.cols))
+                let cellHeight = surface.bounds.height / CGFloat(max(1, terminal.rows))
+                func viewPoint(col: Int, row: Int) -> NSPoint {
+                    NSPoint(x: (CGFloat(col) + 0.5) * cellWidth,
+                            y: surface.bounds.height - (CGFloat(row) + 0.5) * cellHeight)
+                }
+                func mouseEvent(_ type: NSEvent.EventType, col: Int, row: Int,
+                                number: Int) -> NSEvent {
+                    // `calculateMouseHit` converts `locationInWindow`, so the
+                    // event has to be built in window coordinates.
+                    let windowPoint = surface.convert(viewPoint(col: col, row: row), to: nil)
+                    return NSEvent.mouseEvent(with: type,
+                                              location: windowPoint,
+                                              modifierFlags: [],
+                                              timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: panel.windowNumber,
+                                              context: nil,
+                                              eventNumber: number,
+                                              clickCount: 1,
+                                              pressure: 0)!
+                }
+
+                // Overshoot the marker so cell-rounding drift cannot shorten
+                // the selection to a prefix of it.
+                let endCol = min(terminal.cols - 1, markerEndCol + 4)
+                NSPasteboard.general.clearContents()
+
+                surface.mouseDown(with: mouseEvent(.leftMouseDown, col: 0, row: row, number: 1))
+                // The first drag anchors the selection, the second extends it.
+                surface.mouseDragged(with: mouseEvent(.leftMouseDragged, col: 0, row: row, number: 2))
+                surface.mouseDragged(with: mouseEvent(.leftMouseDragged, col: endCol, row: row, number: 3))
+                surface.mouseUp(with: mouseEvent(.leftMouseUp, col: endCol, row: row, number: 4))
+
+                TestHarness.expect(surface.selection.hasSelectionRange,
+                                   "dragging selected a range")
+                TestHarness.expect(surface.selection.getSelectedText().contains(marker),
+                                   "the selection is the dragged marker text")
+                let copied = NSPasteboard.general.string(forType: .string) ?? ""
+                TestHarness.expect(copied.contains(marker),
+                                   "releasing the drag copied the selection (\"\(copied.trimmingCharacters(in: .whitespaces))\")")
+
+                // A bare click that dismisses the selection must not touch the
+                // clipboard: `mouseDown` clears `selection.active`, so the copy
+                // guard in `mouseUp` is what keeps this a no-op.
+                NSPasteboard.general.clearContents()
+                surface.mouseDown(with: mouseEvent(.leftMouseDown, col: 0, row: row, number: 5))
+                surface.mouseUp(with: mouseEvent(.leftMouseUp, col: 0, row: row, number: 6))
+                TestHarness.expect(NSPasteboard.general.string(forType: .string) == nil,
+                                   "a click that only dismisses the selection copies nothing")
+
+                panel.orderOut(nil)
+            }
+
             TestHarness.group("Panel — content starts below the title bar") {
                 let controller = PanelController()
                 let panel = controller.panel
