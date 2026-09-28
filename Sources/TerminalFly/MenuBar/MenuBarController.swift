@@ -8,6 +8,7 @@ struct MenuBarMenu: View {
     var onOpenSettings: () -> Void
     var onRestartShell: () -> Void
     var onQuit: () -> Void
+    var onCloseApps: () -> Void = {}
 
     /// herdr section. Optional so the menu still renders on a machine without it.
     var herdrPanes: [HerdrProtocol.Pane] = []
@@ -44,14 +45,16 @@ struct MenuBarMenu: View {
             Button("Cycle corner") { controller.cycleCorner(); revision += 1 }
         }
 
+        // Same level list the ⌃⌥O hotkey cycles through, so the checkmark can
+        // never point at a level the cycle skips (or vice versa).
         Menu("Opacity: \(Int(store.opacity * 100))%") {
-            ForEach([0.3, 0.5, 0.7, 0.8, 0.9, 1.0], id: \.self) { value in
+            ForEach(PanelController.opacityPresets, id: \.self) { value in
                 Button {
-                    store.opacity = value
-                    controller.setOpacity(CGFloat(value))
+                    store.opacity = Double(value)
+                    controller.setOpacity(value)
                     revision += 1
                 } label: {
-                    Text(abs(store.opacity - value) < 0.001
+                    Text(abs(controller.opacity - value) < 0.001
                          ? "✓ \(Int(value * 100))%"
                          : "   \(Int(value * 100))%")
                 }
@@ -62,6 +65,15 @@ struct MenuBarMenu: View {
         Button("Shrink height") { controller.shrink() }
         Button("Grow width") { controller.growWidth() }
         Button("Shrink width") { controller.shrinkWidth() }
+
+        Divider()
+
+        Button("Cycle opacity") {
+            store.opacity = Double(controller.cycleOpacity())
+            revision += 1
+        }
+        Button("Toggle fullscreen") { controller.toggleFullscreen(); revision += 1 }
+        Button("Toggle small screen") { controller.toggleSmallScreen(); revision += 1 }
 
         Divider()
 
@@ -83,6 +95,8 @@ struct MenuBarMenu: View {
             }
             Divider()
         }
+
+        Button("Close all apps") { onCloseApps() }
 
         Button("Settings…") { onOpenSettings() }
         Button("Quit Terminal Fly") { onQuit() }

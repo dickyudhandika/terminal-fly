@@ -49,8 +49,12 @@ needed — see [Building](#building) for why that's worth stating explicitly.
 | `⌃⌥↓` | Grow height (top edge pinned) |
 | `⌃⌥←` | Shrink width (margin-anchored edge pinned) |
 | `⌃⌥→` | Grow width (margin-anchored edge pinned) |
+| `⌃⌥O` | Cycle opacity (30% → 50% → 70% → 85% → 100%) |
+| `⌃⌥F` | Toggle fullscreen (fills visible area) |
+| `⌃⌥S` | Toggle small screen (480×280 bottom-right) |
+| `⌃⌥Q` | Close all apps (except Terminal Fly and Finder) |
 
-All six are rebindable in Settings → Hotkeys.
+All ten are rebindable in Settings → Hotkeys.
 
 Resize is bounded by the display: `NSWindow.maxSize` / `minSize` are set from the
 current screen's `visibleFrame` (minus a 24pt margin), so neither a hotkey nor a

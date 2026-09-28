@@ -203,5 +203,29 @@ enum GeometryTests {
             TestHarness.expect(!PanelGeometry.isFullyVisible(overhanging, in: screen),
                                "…but it is not fully visible")
         }
+
+        TestHarness.group("PanelGeometry — fullscreen preset") {
+            let frame = PanelGeometry.fullscreenFrame(in: screen)
+            let expected = PanelGeometry.maximumSize(in: screen)
+            TestHarness.equal(frame.size, expected, "fullscreen uses the maximum size")
+            TestHarness.equal(frame.minX, screen.minX + 24, "fullscreen keeps the left margin")
+            TestHarness.equal(frame.minY, screen.minY + 24, "fullscreen keeps the bottom margin")
+            TestHarness.equal(frame.maxX, screen.maxX - 24, "fullscreen stops at the right edge")
+            TestHarness.equal(frame.maxY, screen.maxY - 24, "fullscreen stops below the menu bar")
+            TestHarness.expect(PanelGeometry.isFullyVisible(frame, in: screen),
+                               "fullscreen is entirely on screen")
+        }
+
+        TestHarness.group("PanelGeometry — small screen preset") {
+            let frame = PanelGeometry.smallFrame(in: screen)
+            TestHarness.equal(frame.size, CGSize(width: 480, height: 280),
+                              "small screen is 480x280")
+            TestHarness.equal(frame.maxX, screen.maxX - 24, "small screen hugs the right edge")
+            TestHarness.equal(frame.minY, screen.minY + 24, "small screen clears the Dock")
+            TestHarness.expect(PanelGeometry.isFullyVisible(frame, in: screen),
+                               "small screen is entirely on screen")
+            TestHarness.expect(frame.size.width < PanelGeometry.fullscreenFrame(in: screen).width,
+                               "small screen is narrower than fullscreen")
+        }
     }
 }

@@ -31,6 +31,14 @@ enum HotkeyTests {
                               "increase width is ⌃⌥→")
             TestHarness.equal(HotkeyAction.decreaseWidth.defaultBinding.display, "⌃⌥←",
                               "decrease width is ⌃⌥←")
+            TestHarness.equal(HotkeyAction.toggleOpacity.defaultBinding.display, "⌃⌥O",
+                              "cycle opacity is ⌃⌥O")
+            TestHarness.equal(HotkeyAction.toggleFullscreen.defaultBinding.display, "⌃⌥F",
+                              "toggle fullscreen is ⌃⌥F")
+            TestHarness.equal(HotkeyAction.toggleSmallScreen.defaultBinding.display, "⌃⌥S",
+                              "toggle small screen is ⌃⌥S")
+            TestHarness.equal(HotkeyAction.closeApps.defaultBinding.display, "⌃⌥Q",
+                              "close apps is ⌃⌥Q")
 
             // Every action must have a distinct default, otherwise registering
             // them would silently collide with itself.
@@ -63,6 +71,19 @@ enum HotkeyTests {
                 }
                 TestHarness.equal(decoded, binding, "\(action.rawValue) survives a JSON round trip")
             }
+        }
+
+        TestHarness.group("PanelController — opacity presets") {
+            let presets = PanelController.opacityPresets
+            TestHarness.equal(presets.count, 5, "five opacity levels")
+            TestHarness.equal(presets.first, 0.3, "the cycle starts at 30%")
+            TestHarness.equal(presets.last, 1.0, "the cycle ends fully opaque")
+            // `setOpacity` clamps to 0.2, so a preset below that would silently
+            // land somewhere the menu never advertises.
+            TestHarness.expect(presets.allSatisfy { $0 >= 0.2 && $0 <= 1.0 },
+                               "every preset survives the setOpacity clamp")
+            TestHarness.expect(zip(presets, presets.dropFirst()).allSatisfy { $0 < $1 },
+                               "presets ascend, so the cycle never goes back a step")
         }
     }
 }

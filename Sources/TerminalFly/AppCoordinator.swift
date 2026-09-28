@@ -286,6 +286,12 @@ final class AppCoordinator: NSObject {
         case .decreaseHeight: controller.shrink()
         case .increaseWidth: controller.growWidth()
         case .decreaseWidth: controller.shrinkWidth()
+        // Persisted like the slider path, so the cycle level survives a relaunch
+        // instead of snapping back to the stored 92% default on every hotkey use.
+        case .toggleOpacity: preferences.opacity = Double(controller.cycleOpacity())
+        case .toggleFullscreen: controller.toggleFullscreen()
+        case .toggleSmallScreen: controller.toggleSmallScreen()
+        case .closeApps: closeApps()
         }
         refreshMenuBar()
     }
@@ -314,6 +320,7 @@ final class AppCoordinator: NSObject {
             onOpenSettings: { [weak self] in self?.openSettings() },
             onRestartShell: { [weak self] in self?.restartShell() },
             onQuit: { NSApp.terminate(nil) },
+            onCloseApps: { [weak self] in self?.closeApps() },
             // Read from the cache, never from the socket: `buildMenu()` runs inside
             // `init`, so a blocking call here would stall app launch for the whole
             // socket timeout whenever herdr is present but wedged.
@@ -366,6 +373,23 @@ final class AppCoordinator: NSObject {
     func restartShell() {
         controller.surface.applyConfiguration(preferences.shellConfiguration)
         controller.surface.restartShell()
+    }
+
+    // MARK: - Close apps
+
+    /// Asks every regular app to quit, leaving Terminal Fly and Finder alone.
+    ///
+    /// `terminate()` is the graceful path, so apps get to run their own save and
+    /// quit handlers. Background-only apps (menu bar tools, agents, daemons) are
+    /// `activationPolicy != .regular` and are deliberately left running.
+    func closeApps() {
+        let ownBundleID = Bundle.main.bundleIdentifier
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular,
+                  app.bundleIdentifier != ownBundleID,
+                  app.bundleIdentifier != "com.apple.finder" else { continue }
+            app.terminate()
+        }
     }
 
     // MARK: - Settings window

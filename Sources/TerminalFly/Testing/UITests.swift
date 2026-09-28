@@ -576,6 +576,70 @@ enum UITests {
                 controller.hide()
             }
 
+            TestHarness.group("PanelController — opacity cycle moves the real window") {
+                let controller = PanelController()
+                // 0.7 is on the preset list, so the press must move past it rather
+                // than land on the level the panel already has.
+                controller.setOpacity(0.7)
+                controller.cycleOpacity()
+                TestHarness.equal(controller.opacity, 0.85,
+                                  "a press from a preset level steps past it")
+
+                // Wrap: from the top preset the cycle returns to the bottom one.
+                controller.setOpacity(1.0)
+                controller.cycleOpacity()
+                TestHarness.equal(controller.opacity, 0.3,
+                                  "the cycle wraps from 100% back to 30%")
+
+                // Off-list levels (the Appearance slider, the unfocused rule) get
+                // the next preset up instead of an index-relative jump.
+                controller.setOpacity(0.92)
+                controller.cycleOpacity()
+                TestHarness.equal(controller.opacity, 1.0,
+                                  "an off-list level snaps up to the next preset")
+            }
+
+            TestHarness.group("PanelController — fullscreen and small-screen presets") {
+                let controller = PanelController()
+                let panel = controller.panel
+                guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else {
+                    TestHarness.expect(false, "no screen available for the preset check")
+                    return
+                }
+
+                let original = NSRect(x: 200, y: 200, width: 620, height: 320)
+                panel.setFrame(original, display: false)
+                let originalFrame = panel.frame
+
+                controller.toggleFullscreen()
+                TestHarness.expect(controller.isFullscreen, "toggleFullscreen enters")
+                TestHarness.equal(panel.frame, PanelGeometry.fullscreenFrame(in: visible),
+                                  "the panel takes the fullscreen frame")
+                TestHarness.expect(PanelGeometry.isFullyVisible(panel.frame, in: visible),
+                                   "the fullscreen frame is entirely on screen")
+
+                controller.toggleFullscreen()
+                TestHarness.expect(!controller.isFullscreen, "toggleFullscreen exits")
+                TestHarness.equal(panel.frame, originalFrame,
+                                  "exiting fullscreen restores the previous frame")
+
+                controller.toggleSmallScreen()
+                TestHarness.expect(controller.isSmallScreen, "toggleSmallScreen enters")
+                TestHarness.equal(panel.frame, PanelGeometry.smallFrame(in: visible),
+                                  "the panel takes the small-screen frame")
+
+                // Switching straight to fullscreen must not lose the user's real
+                // frame: the small-screen frame is a preset, not a custom one.
+                controller.toggleFullscreen()
+                TestHarness.expect(!controller.isSmallScreen, "fullscreen clears small screen")
+                TestHarness.equal(panel.frame, PanelGeometry.fullscreenFrame(in: visible),
+                                  "switching presets applies the new frame directly")
+
+                controller.toggleFullscreen()
+                TestHarness.equal(panel.frame, originalFrame,
+                                  "the frame from before the preset chain is restored")
+            }
+
             harnessResult = TestHarness.finish()
         }
 

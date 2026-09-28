@@ -10,6 +10,10 @@ enum HotkeyAction: String, CaseIterable {
     case decreaseHeight
     case increaseWidth
     case decreaseWidth
+    case toggleOpacity
+    case toggleFullscreen
+    case toggleSmallScreen
+    case closeApps
 
     var title: String {
         switch self {
@@ -19,6 +23,10 @@ enum HotkeyAction: String, CaseIterable {
         case .decreaseHeight: return "Decrease height"
         case .increaseWidth: return "Increase width"
         case .decreaseWidth: return "Decrease width"
+        case .toggleOpacity: return "Cycle opacity"
+        case .toggleFullscreen: return "Toggle fullscreen"
+        case .toggleSmallScreen: return "Toggle small screen"
+        case .closeApps: return "Close all apps"
         }
     }
 
@@ -30,6 +38,10 @@ enum HotkeyAction: String, CaseIterable {
         case .decreaseHeight: return .defaultHeightDecrease
         case .increaseWidth: return .defaultWidthIncrease
         case .decreaseWidth: return .defaultWidthDecrease
+        case .toggleOpacity: return .defaultToggleOpacity
+        case .toggleFullscreen: return .defaultToggleFullscreen
+        case .toggleSmallScreen: return .defaultToggleSmallScreen
+        case .closeApps: return .defaultCloseApps
         }
     }
 }

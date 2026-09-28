@@ -31,6 +31,26 @@ struct PanelGeometry {
                height: visibleFrame.height - margin * 2)
     }
 
+    /// Frame that fills the visible area, leaving `margin` on all sides.
+    /// This is the "fullscreen" preset — the panel maximises but stays
+    /// inside the menu bar / Dock boundary.
+    static func fullscreenFrame(in visibleFrame: CGRect) -> CGRect {
+        let size = maximumSize(in: visibleFrame)
+        return CGRect(
+            x: visibleFrame.minX + margin,
+            y: visibleFrame.minY + margin,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    /// A compact frame: 480×280, positioned at the bottom-right corner.
+    /// This is the "small screen" preset.
+    static func smallFrame(in visibleFrame: CGRect) -> CGRect {
+        let size = CGSize(width: 480, height: 280)
+        return frame(for: .bottomRight, size: size, in: visibleFrame)
+    }
+
     enum Corner: String, CaseIterable {
         case topLeft, topRight, bottomLeft, bottomRight
 

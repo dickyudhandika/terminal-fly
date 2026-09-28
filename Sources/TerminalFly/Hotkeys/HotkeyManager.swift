@@ -43,6 +43,30 @@ struct HotkeyBinding: Equatable, Codable {
         modifiers: UInt32(controlKey | optionKey),
         display: "⌃⌥←"
     )
+
+    static let defaultToggleOpacity = HotkeyBinding(
+        keyCode: UInt32(kVK_ANSI_O),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥O"
+    )
+
+    static let defaultToggleFullscreen = HotkeyBinding(
+        keyCode: UInt32(kVK_ANSI_F),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥F"
+    )
+
+    static let defaultToggleSmallScreen = HotkeyBinding(
+        keyCode: UInt32(kVK_ANSI_S),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥S"
+    )
+
+    static let defaultCloseApps = HotkeyBinding(
+        keyCode: UInt32(kVK_ANSI_Q),
+        modifiers: UInt32(controlKey | optionKey),
+        display: "⌃⌥Q"
+    )
 }
 
 /// Registers system-wide hotkeys.

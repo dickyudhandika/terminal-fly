@@ -50,6 +50,13 @@ final class PositionManager {
         DispatchQueue.main.async { [weak self] in self?.isProgrammaticMove = false }
     }
 
+    /// Applies a frame to the panel with the same programmatic-move guard as
+    /// `applyFrame`, for callers outside this type (the fullscreen and
+    /// small-screen presets in `PanelController`).
+    func applyFrameExternal(_ frame: NSRect) {
+        applyFrame(frame, display: true)
+    }
+
     init(panel: NSPanel) {
         self.panel = panel
         updateSizeLimits()

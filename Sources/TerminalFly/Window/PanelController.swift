@@ -222,6 +222,84 @@ final class PanelController {
 
     var opacity: CGFloat { panel.alphaValue }
 
+    /// Opacity levels the ⌃⌥O hotkey cycles through, ascending. `nonisolated` so
+    /// the pure-logic test target and the menu can read it without the main actor.
+    nonisolated static let opacityPresets: [CGFloat] = [0.3, 0.5, 0.7, 0.85, 1.0]
+
+    /// Cycles panel opacity through the presets, wrapping at the top. Returns the
+    /// value it applied so the caller can keep the stored preference in sync.
+    ///
+    /// Stateless on purpose: the next level is derived from whatever alpha the
+    /// panel actually has right now. The Appearance slider and the
+    /// transparent-when-unfocused rule both write alpha behind this method's
+    /// back, and a remembered index would then resume from a level that no
+    /// longer matches what the user is looking at.
+    @discardableResult
+    func cycleOpacity() -> CGFloat {
+        let current = panel.alphaValue
+        // A hair of tolerance so a preset we just applied counts as "current"
+        // and the cycle advances instead of sticking on it.
+        let next = Self.opacityPresets.first { $0 > current + 0.001 }
+            ?? Self.opacityPresets[0]
+        setOpacity(next)
+        return next
+    }
+
+    // MARK: - Fullscreen / small screen toggles
+
+    /// Frame to restore when leaving fullscreen or small screen.
+    private var savedFrame: NSRect?
+
+    /// Whether the panel is currently showing the fullscreen preset.
+    private(set) var isFullscreen = false
+
+    /// Whether the panel is currently showing the small-screen preset.
+    private(set) var isSmallScreen = false
+
+    /// Toggles the panel between the fullscreen preset and its previous frame.
+    ///
+    /// The two presets share one saved frame, so a fullscreen → small screen →
+    /// fullscreen chain still comes back to the frame the user actually had,
+    /// rather than to whatever the other preset last applied.
+    func toggleFullscreen() {
+        if isFullscreen {
+            restoreSavedFrame()
+            return
+        }
+        // Entering from the *other* preset must keep the frame saved when that
+        // one was entered — `panel.frame` here is the preset, not the user's.
+        let original = isSmallScreen ? (savedFrame ?? panel.frame) : panel.frame
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        savedFrame = original
+        isSmallScreen = false
+        positions.applyFrameExternal(PanelGeometry.fullscreenFrame(in: visible))
+        isFullscreen = true
+    }
+
+    /// Toggles the panel between the small-screen preset and its previous frame.
+    func toggleSmallScreen() {
+        if isSmallScreen {
+            restoreSavedFrame()
+            return
+        }
+        let original = isFullscreen ? (savedFrame ?? panel.frame) : panel.frame
+        guard let visible = (panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        savedFrame = original
+        isFullscreen = false
+        positions.applyFrameExternal(PanelGeometry.smallFrame(in: visible))
+        isSmallScreen = true
+    }
+
+    /// Leaves whichever preset is active and puts the user's frame back.
+    private func restoreSavedFrame() {
+        if let saved = savedFrame {
+            positions.applyFrameExternal(saved)
+        }
+        savedFrame = nil
+        isFullscreen = false
+        isSmallScreen = false
+    }
+
     func saveFrame() {
         positions.save()
     }
